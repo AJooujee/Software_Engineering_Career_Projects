@@ -1,0 +1,45 @@
+# CMake
+build/
+cmake-build-*/
+CMakeFiles/
+CMakeCache.txt
+cmake_install.cmake
+
+# Compiled files
+*.exe
+*.obj
+*.o
+*.dll
+*.lib
+*.pdb
+
+# Visual Studio
+.vs/
+*.sln
+*.vcxproj
+*.vcxproj.filters
+*.user
+
+# VS Code
+.vscode/
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# Logs
+logs/*.log
+logs/*.json
+
+# Testing and coverage
+Testing/
+coverage/
+*.gcda
+*.gcno
+*.gcov
+
+# OS files
+.DS_Store
+Thumbs.db
