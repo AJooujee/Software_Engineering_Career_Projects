@@ -6,13 +6,26 @@ void SystemStateManager::update(
     const Fault& fault
 )
 {
-    // Replace the previous status for this sensor with its newest result.
-    sensorHealth_[reading.sensorId] = {
+    // Forward to the sensor-ID overload.
+    update(
+        reading.sensorId,
+        fault
+    );
+}
+
+
+void SystemStateManager::update(
+    const std::string& sensorId,
+    const Fault& fault
+)
+{
+    // Replace the previous health condition for this sensor.
+    sensorHealth_[sensorId] = {
         fault.detected,
         fault.severity
     };
 
-    // Recalculate the overall state after every sensor update.
+    // Recalculate the overall state after every health update.
     recalculateState();
 }
 
@@ -80,14 +93,14 @@ void SystemStateManager::recalculateState()
         }
     }
 
-    // A critical fault or two simultaneous faults triggers safe mode.
+    // One critical fault or two simultaneous faults trigger safe mode.
     if (criticalFaultDetected || activeFaultCount >= 2)
     {
         currentState_ = SystemState::SafeMode;
         return;
     }
 
-    // One warning-level fault produces degraded operation.
+    // One warning-level fault causes degraded operation.
     if (activeFaultCount == 1)
     {
         currentState_ = SystemState::Degraded;

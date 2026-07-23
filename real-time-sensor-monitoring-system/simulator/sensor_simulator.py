@@ -17,18 +17,18 @@ import time
 from datetime import datetime, timezone
 
 
-# IP address of the C++ server.
-# 127.0.0.1 means the server runs on the same computer.
+# IP address of the C++ monitoring server.
+# 127.0.0.1 means the server is running on the same computer.
 SERVER_HOST = "127.0.0.1"
 
 # TCP port shared by the Python client and C++ server.
 SERVER_PORT = 5050
 
-# Delay between each group of sensor readings.
+# Number of seconds between each group of sensor readings.
 SENSOR_INTERVAL_SECONDS = 1.0
 
 
-# Supported fault-injection scenarios.
+# Supported normal-operation and fault-injection scenarios.
 SUPPORTED_SCENARIOS = (
     "normal",
     "temperature-warning",
@@ -37,6 +37,7 @@ SUPPORTED_SCENARIOS = (
     "voltage-critical",
     "multiple-faults",
     "invalid-motion",
+    "sensor-timeout",
 )
 
 
@@ -48,6 +49,7 @@ def parse_arguments() -> argparse.Namespace:
         python sensor_simulator.py --scenario temperature-warning
     """
 
+    # Create the command-line argument parser.
     parser = argparse.ArgumentParser(
         description=(
             "Generate simulated sensor readings and send them "
@@ -55,6 +57,7 @@ def parse_arguments() -> argparse.Namespace:
         )
     )
 
+    # Add the optional scenario argument.
     parser.add_argument(
         "--scenario",
         choices=SUPPORTED_SCENARIOS,
@@ -108,15 +111,15 @@ def get_temperature_value(
     """
 
     if scenario == "temperature-warning":
-        # Warning range in C++ is above 85°F but not critical.
+        # Warning-level temperature.
         return 90.0
 
     if scenario == "temperature-critical":
-        # Critical range in C++ is above 120°F.
+        # Critical temperature.
         return 130.0
 
     if scenario == "multiple-faults":
-        # First warning-level fault for the multiple-fault scenario.
+        # First warning-level fault in the multiple-fault scenario.
         return 90.0
 
     # Normal operating temperature.
@@ -131,11 +134,11 @@ def get_voltage_value(
     """
 
     if scenario == "voltage-warning":
-        # Warning range in C++ is above 12.8 V but not critical.
+        # Warning-level voltage.
         return 13.2
 
     if scenario == "voltage-critical":
-        # Critical range in C++ is above 14.5 V.
+        # Critical voltage.
         return 15.2
 
     if scenario == "multiple-faults":
@@ -240,28 +243,47 @@ def generate_motion_reading(
 def create_sensor_cycle(
     sequence_number: int,
     scenario: str,
+    cycle_number: int,
 ) -> list[dict]:
     """
-    Generate one complete cycle containing four sensor readings.
+    Generate one complete cycle of sensor readings.
+
+    During the sensor-timeout scenario, TEMP-01 stops transmitting
+    after the first three cycles. The C++ monitor should detect that
+    the sensor has not reported within the configured timeout.
     """
 
-    return [
-        generate_temperature_reading(
-            sequence_number,
-            scenario,
-        ),
-        generate_voltage_reading(
-            sequence_number + 1,
-            scenario,
-        ),
-        generate_position_reading(
-            sequence_number + 2,
-        ),
-        generate_motion_reading(
-            sequence_number + 3,
-            scenario,
-        ),
-    ]
+    # Store all readings generated during the current cycle.
+    sensor_readings: list[dict] = []
+
+    # During normal scenarios, always send the temperature sensor.
+    # During sensor-timeout, stop sending TEMP-01 after cycle 3.
+    if scenario != "sensor-timeout" or cycle_number <= 3:
+        sensor_readings.append(
+            generate_temperature_reading(
+                sequence_number,
+                scenario,
+            )
+        )
+
+    # Always send voltage, position, and motion readings.
+    sensor_readings.extend(
+        [
+            generate_voltage_reading(
+                sequence_number + 1,
+                scenario,
+            ),
+            generate_position_reading(
+                sequence_number + 2,
+            ),
+            generate_motion_reading(
+                sequence_number + 3,
+                scenario,
+            ),
+        ]
+    )
+
+    return sensor_readings
 
 
 def send_message(
@@ -276,15 +298,15 @@ def send_message(
     # Convert the Python dictionary into compact JSON text.
     json_message = json.dumps(reading)
 
-    # Add a newline to identify the end of the message.
+    # Add a newline so the C++ receiver can detect message boundaries.
     network_message = f"{json_message}\n"
 
-    # Convert the message to UTF-8 bytes and transmit all bytes.
+    # Convert the string to UTF-8 bytes and transmit all bytes.
     client_socket.sendall(
         network_message.encode("utf-8")
     )
 
-    # Display the message sent for debugging and demonstration.
+    # Display the transmitted message for debugging.
     print(f"[SENT] {json_message}")
 
 
@@ -298,8 +320,12 @@ def main() -> None:
     arguments = parse_arguments()
     scenario = arguments.scenario
 
-    # Every outgoing message receives a unique sequence number.
+    # Every outgoing message receives a sequence number.
     sequence_number = 1
+
+    # Count how many complete sensor cycles have been generated.
+    # This is required for the sensor-timeout scenario.
+    cycle_number = 1
 
     print("Multi-sensor TCP simulator started.")
     print(f"Scenario: {scenario}")
@@ -321,49 +347,63 @@ def main() -> None:
             print("Press Ctrl + C to stop.\n")
 
             while True:
-                # Generate four readings using the selected scenario.
+                # Generate readings using the selected scenario
+                # and current cycle number.
                 sensor_readings = create_sensor_cycle(
                     sequence_number,
                     scenario,
+                    cycle_number,
                 )
 
-                # Transmit each sensor reading individually.
+                # Transmit every generated sensor reading.
                 for reading in sensor_readings:
                     send_message(
                         client_socket,
                         reading,
                     )
 
-                # Four messages were transmitted during the cycle.
+                # Advance by the number of messages actually sent.
+                #
+                # During sensor-timeout, only three messages are sent
+                # after TEMP-01 stops transmitting.
                 sequence_number += len(sensor_readings)
 
-                # Separate each cycle visually in the terminal.
+                # Advance to the next simulation cycle.
+                cycle_number += 1
+
+                # Separate cycles visually in the terminal.
                 print()
 
-                # Wait before generating the next sensor cycle.
+                # Wait before generating the next cycle.
                 time.sleep(SENSOR_INTERVAL_SECONDS)
 
     except ConnectionRefusedError:
-        # This normally means the C++ server is not running.
+        # This usually means the C++ server is not running.
         print(
             "Connection failed. Start the C++ sensor monitor "
             "before starting the Python simulator."
         )
 
     except ConnectionResetError:
-        # This occurs when the C++ server closes the connection.
+        # This occurs if the C++ server closes the connection.
         print(
             "The C++ sensor monitor closed the connection."
         )
 
+    except BrokenPipeError:
+        # This occurs when the connection closes during transmission.
+        print(
+            "The network connection was closed while sending sensor data."
+        )
+
     except KeyboardInterrupt:
-        # Exit cleanly when Ctrl + C is pressed.
+        # Exit cleanly when the user presses Ctrl + C.
         print(
             "\nMulti-sensor TCP simulator stopped."
         )
 
     except OSError as error:
-        # Handle other operating-system and networking failures.
+        # Handle other networking or operating-system errors.
         print(
             f"Network error: {error}"
         )
