@@ -1,46 +1,41 @@
-// Standard library used for displaying program output.
-#include <iostream>
+#include "system/FaultDetector.hpp"
+#include "system/SensorMessageParser.hpp"
+#include "system/SystemStateManager.hpp"
 
-// Standard library used for storing and processing text.
-#include <string>
-
-// Standard library used for a fixed-size receive buffer.
+// Standard library used for fixed-size receive buffers.
 #include <array>
 
-// Standard library used for exception handling.
+// Standard library used for console output.
+#include <iostream>
+
+// Standard library used for exceptions.
 #include <stdexcept>
 
-// Standard library used for numeric size types such as std::size_t.
-#include <cstddef>
+// Standard library used for incoming message text.
+#include <string>
 
 
-// Windows uses the Winsock networking API.
 #ifdef _WIN32
 
-// Prevent Windows headers from defining min and max macros.
+// Prevent Windows headers from defining conflicting macros.
 #define NOMINMAX
 
 #include <winsock2.h>
 #include <ws2tcpip.h>
 
-// Define a common socket type for Windows.
 using SocketHandle = SOCKET;
 
-// Define the platform-specific invalid socket value.
 constexpr SocketHandle INVALID_SOCKET_HANDLE = INVALID_SOCKET;
 
 #else
 
-// Linux and UNIX-like systems use POSIX sockets.
 #include <arpa/inet.h>
 #include <netinet/in.h>
 #include <sys/socket.h>
 #include <unistd.h>
 
-// Define a common socket type for Linux and UNIX.
 using SocketHandle = int;
 
-// Define the platform-specific invalid socket value.
 constexpr SocketHandle INVALID_SOCKET_HANDLE = -1;
 
 #endif
@@ -51,17 +46,16 @@ namespace
     // TCP port shared by the C++ server and Python simulator.
     constexpr unsigned short SERVER_PORT = 5050;
 
-    // Maximum number of pending client connections.
+    // Only one simulator connection is required at a time.
     constexpr int CONNECTION_BACKLOG = 1;
 
-    // Number of bytes read during each network receive operation.
+    // Maximum amount of data read during one recv operation.
     constexpr std::size_t RECEIVE_BUFFER_SIZE = 4096;
 
 
-    /**
-     * Close a socket using the correct operating-system function.
-     */
-    void closeSocket(const SocketHandle socketHandle)
+    void closeSocket(
+        const SocketHandle socketHandle
+    )
     {
 #ifdef _WIN32
         closesocket(socketHandle);
@@ -71,12 +65,6 @@ namespace
     }
 
 
-    /**
-     * Initialize platform-specific networking.
-     *
-     * Windows requires WSAStartup before sockets can be used.
-     * Linux does not require an equivalent initialization step.
-     */
     void initializeNetworking()
     {
 #ifdef _WIN32
@@ -99,9 +87,6 @@ namespace
     }
 
 
-    /**
-     * Release platform-specific networking resources.
-     */
     void cleanupNetworking()
     {
 #ifdef _WIN32
@@ -110,13 +95,8 @@ namespace
     }
 
 
-    /**
-     * Create a TCP server socket, bind it to port 5050,
-     * and begin listening for a client connection.
-     */
     SocketHandle createServerSocket()
     {
-        // Create an IPv4 TCP socket.
         const SocketHandle serverSocket{
             socket(
                 AF_INET,
@@ -134,16 +114,10 @@ namespace
 
         sockaddr_in serverAddress{};
 
-        // Use IPv4.
         serverAddress.sin_family = AF_INET;
-
-        // Accept connections from any local network interface.
         serverAddress.sin_addr.s_addr = htonl(INADDR_ANY);
-
-        // Convert the port number into network byte order.
         serverAddress.sin_port = htons(SERVER_PORT);
 
-        // Bind the socket to the selected address and port.
         const int bindResult{
             bind(
                 serverSocket,
@@ -161,7 +135,6 @@ namespace
             );
         }
 
-        // Start listening for incoming connections.
         const int listenResult{
             listen(
                 serverSocket,
@@ -182,9 +155,6 @@ namespace
     }
 
 
-    /**
-     * Wait for and accept one Python simulator connection.
-     */
     SocketHandle acceptClientConnection(
         const SocketHandle serverSocket
     )
@@ -220,35 +190,96 @@ namespace
     }
 
 
-    /**
-     * Receive newline-delimited JSON messages from the Python simulator.
-     *
-     * TCP is a byte stream, so one recv() call may contain:
-     * - part of one JSON message
-     * - exactly one JSON message
-     * - multiple JSON messages
-     *
-     * The pendingData string stores incomplete data until a newline
-     * marks the end of one complete JSON message.
-     */
-    void receiveSensorMessages(
-        const SocketHandle clientSocket
+    void processSensorMessage(
+        const std::string& message,
+        const FaultDetector& faultDetector,
+        SystemStateManager& stateManager
     )
     {
-        // Temporary fixed-size network buffer.
+        try
+        {
+            // Convert incoming JSON into a validated C++ object.
+            const SensorReading reading{
+                SensorMessageParser::parse(message)
+            };
+
+            // Evaluate the reading against its configured limits.
+            const Fault fault{
+                faultDetector.analyze(reading)
+            };
+
+            // Update the current system health and operating state.
+            stateManager.update(
+                reading,
+                fault
+            );
+
+            std::cout
+                << "[SENSOR] "
+                << reading.sensorId
+                << " | Type: "
+                << reading.sensorType
+                << " | Value: "
+                << reading.value
+                << ' '
+                << reading.unit
+                << " | Sequence: "
+                << reading.sequenceNumber
+                << '\n';
+
+            if (fault.detected)
+            {
+                std::cout
+                    << "[FAULT] "
+                    << faultSeverityToString(fault.severity)
+                    << " | "
+                    << fault.type
+                    << " | "
+                    << fault.message
+                    << '\n';
+            }
+            else
+            {
+                std::cout
+                    << "[STATUS] Reading accepted.\n";
+            }
+
+            std::cout
+                << "[SYSTEM] State: "
+                << stateManager.getStateName()
+                << " | Active faults: "
+                << stateManager.getActiveFaultCount()
+                << "\n--------------------------------------------\n";
+        }
+        catch (const std::exception& error)
+        {
+            // Invalid JSON is rejected without stopping the server.
+            std::cerr
+                << "[INVALID MESSAGE] "
+                << error.what()
+                << "\n--------------------------------------------\n";
+        }
+    }
+
+
+    void receiveSensorMessages(
+        const SocketHandle clientSocket,
+        const FaultDetector& faultDetector,
+        SystemStateManager& stateManager
+    )
+    {
         std::array<char, RECEIVE_BUFFER_SIZE> receiveBuffer{};
 
-        // Stores incomplete messages between receive operations.
+        // Stores incomplete TCP data until a newline arrives.
         std::string pendingData;
 
         std::cout
             << "Python simulator connected successfully.\n"
-            << "Receiving sensor messages...\n"
+            << "Receiving and evaluating sensor messages...\n"
             << "--------------------------------------------\n";
 
         while (true)
         {
-            // Receive bytes from the connected Python client.
             const int bytesReceived{
                 recv(
                     clientSocket,
@@ -258,7 +289,6 @@ namespace
                 )
             };
 
-            // A return value of zero means the client disconnected normally.
             if (bytesReceived == 0)
             {
                 std::cout
@@ -267,7 +297,6 @@ namespace
                 break;
             }
 
-            // A negative value means a receive error occurred.
             if (bytesReceived < 0)
             {
                 throw std::runtime_error(
@@ -275,21 +304,17 @@ namespace
                 );
             }
 
-            // Add the newly received bytes to any previous partial data.
             pendingData.append(
                 receiveBuffer.data(),
                 static_cast<std::size_t>(bytesReceived)
             );
 
-            // Search for the newline that ends one JSON message.
             std::size_t newlinePosition{
                 pendingData.find('\n')
             };
 
-            // Process every complete message currently in pendingData.
             while (newlinePosition != std::string::npos)
             {
-                // Extract one complete JSON message.
                 const std::string message{
                     pendingData.substr(
                         0,
@@ -297,7 +322,6 @@ namespace
                     )
                 };
 
-                // Remove the processed message and its newline.
                 pendingData.erase(
                     0,
                     newlinePosition + 1
@@ -305,14 +329,15 @@ namespace
 
                 if (!message.empty())
                 {
-                    std::cout
-                        << "[RECEIVED] "
-                        << message
-                        << '\n';
+                    processSensorMessage(
+                        message,
+                        faultDetector,
+                        stateManager
+                    );
                 }
 
-                // Search for another complete message.
-                newlinePosition = pendingData.find('\n');
+                newlinePosition =
+                    pendingData.find('\n');
             }
         }
     }
@@ -321,80 +346,74 @@ namespace
 
 int main()
 {
-    // Display the application header.
     std::cout
         << "============================================\n"
         << "Real-Time Multi-Sensor Monitoring System\n"
         << "System status: STARTUP\n"
         << "============================================\n";
 
-    // Store the server socket so it can be closed during error handling.
     SocketHandle serverSocket{
-        INVALID_SOCKET_HANDLE
-    };
-
-    // Store the connected client socket.
-    SocketHandle clientSocket{
         INVALID_SOCKET_HANDLE
     };
 
     try
     {
-        // Initialize Windows networking when required.
         initializeNetworking();
 
-        // Create, bind, and configure the TCP server.
         serverSocket = createServerSocket();
+
+        const FaultDetector faultDetector{};
+        SystemStateManager stateManager{};
 
         std::cout
             << "TCP server listening on port "
             << SERVER_PORT
-            << ".\n"
-            << "Waiting for Python simulator...\n";
+            << ".\n";
 
-        // Wait until the Python simulator connects.
-        clientSocket = acceptClientConnection(
-            serverSocket
-        );
+        // Continue accepting new simulator connections after disconnects.
+        while (true)
+        {
+            std::cout
+                << "Waiting for Python simulator...\n";
 
-        // Receive sensor messages until the simulator disconnects.
-        receiveSensorMessages(
-            clientSocket
-        );
+            const SocketHandle clientSocket{
+                acceptClientConnection(serverSocket)
+            };
 
-        // Close both sockets after normal completion.
-        closeSocket(clientSocket);
-        closeSocket(serverSocket);
+            try
+            {
+                receiveSensorMessages(
+                    clientSocket,
+                    faultDetector,
+                    stateManager
+                );
+            }
+            catch (const std::exception& error)
+            {
+                std::cerr
+                    << "Client connection error: "
+                    << error.what()
+                    << '\n';
+            }
 
-        // Release Windows networking resources.
-        cleanupNetworking();
+            closeSocket(clientSocket);
 
-        std::cout
-            << "Sensor monitoring system stopped normally.\n";
-
-        return 0;
+            std::cout
+                << "Returning to connection-waiting state.\n";
+        }
     }
     catch (const std::exception& error)
     {
-        // Display the reason the application failed.
         std::cerr
             << "System error: "
             << error.what()
             << '\n';
 
-        // Close the client socket if it was opened.
-        if (clientSocket != INVALID_SOCKET_HANDLE)
-        {
-            closeSocket(clientSocket);
-        }
-
-        // Close the server socket if it was opened.
         if (serverSocket != INVALID_SOCKET_HANDLE)
         {
             closeSocket(serverSocket);
         }
 
-        // Release Windows networking resources before exiting.
         cleanupNetworking();
 
         return 1;
