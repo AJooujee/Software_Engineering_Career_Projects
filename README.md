@@ -354,6 +354,19 @@ The integration suite verifies:
 - Invalid motion value
 - Sensor timeout
 
+[PASS] normal
+[PASS] temperature-warning
+[PASS] temperature-critical
+[PASS] multiple-faults
+[PASS] invalid-motion
+[PASS] sensor-timeout
+
+Passed: 6
+Failed: 0
+Total: 6
+
+100% tests passed, 0 tests failed out of 21
+
 ## Event Logging
 
 The application writes structured events to:
@@ -398,3 +411,16 @@ requirements/traceability_matrix.md
 - CMake build configuration
 - Structured event logging
 - Git version control
+
+## Run Program (run Developer Powershell VS)
+1. check the version
+cmake --version
+cl
+
+2. running unit test
+cmake --build build --config Debug
+
+ctest --test-dir build -C Debug --output-on-failure
+
+3. running integration scenarios
+python .\tests\integration\run_scenarios.py
