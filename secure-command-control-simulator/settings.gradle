@@ -1,0 +1,2 @@
+// Define the Gradle project name shown in build output.
+rootProject.name = 'secure-command-control-simulator'

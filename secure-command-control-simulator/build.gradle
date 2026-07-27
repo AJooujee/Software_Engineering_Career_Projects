@@ -1,0 +1,46 @@
+// Apply plugins required for building and running the Java application.
+plugins {
+    id 'java'
+    id 'application'
+}
+
+// Define the project group and initial version.
+group = 'com.aj'
+version = '1.0.0'
+
+// Download dependencies from Maven Central.
+repositories {
+    mavenCentral()
+}
+
+// Declare production and testing dependencies.
+dependencies {
+    // Jackson converts JSON messages into Java objects and back into JSON.
+    implementation 'com.fasterxml.jackson.core:jackson-databind:2.18.2'
+
+    // JUnit Jupiter provides the unit-testing framework.
+    testImplementation platform('org.junit:junit-bom:5.11.4')
+    testImplementation 'org.junit.jupiter:junit-jupiter'
+}
+
+// Require Java 21 for compilation.
+java {
+    toolchain {
+        languageVersion = JavaLanguageVersion.of(21)
+    }
+}
+
+// Define the Java class containing the main method.
+application {
+    mainClass = 'com.aj.commandcontrol.CommandControlApplication'
+}
+
+// Configure all tests to use JUnit 5.
+test {
+    useJUnitPlatform()
+
+    // Display test results in the terminal.
+    testLogging {
+        events 'passed', 'skipped', 'failed'
+    }
+}

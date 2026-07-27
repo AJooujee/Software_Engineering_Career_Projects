@@ -1,0 +1,33 @@
+# Gradle cache and build output
+.gradle/
+build/
+
+# Java compiled files
+*.class
+*.jar
+
+# Visual Studio Code
+.vscode/
+
+# IntelliJ IDEA
+.idea/
+*.iml
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# Runtime logs
+logs/*.log
+logs/*.json
+
+# Secrets and environment files
+.env
+*.key
+*.secret
+
+# Operating-system files
+.DS_Store
+Thumbs.db
