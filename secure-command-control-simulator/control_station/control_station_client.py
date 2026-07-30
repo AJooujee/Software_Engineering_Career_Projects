@@ -4,20 +4,20 @@ import hashlib
 # Import hmac to authenticate commands.
 import hmac
 
-# Import json for command and acknowledgement serialization.
+# Import json to serialize commands and acknowledgements.
 import json
 
 # Import os to read the shared secret.
 import os
 
-# Import socket for TCP communication.
+# Import socket for TCP communication and timeout handling.
 import socket
 
-# Import time for demonstration delays.
+# Import time to delay retries and demonstration commands.
 import time
 
-# Import datetime utilities for current, old, and future timestamps.
-from datetime import datetime, timedelta, timezone
+# Import UTC timestamp utilities.
+from datetime import datetime, timezone
 
 
 SERVER_HOST = "127.0.0.1"
@@ -27,6 +27,15 @@ TARGET_ID = "UNIT-01"
 SECRET_ENVIRONMENT_VARIABLE = (
     "COMMAND_CONTROL_SHARED_SECRET"
 )
+
+# Maximum number of network-send attempts per command.
+MAX_ACK_ATTEMPTS = 3
+
+# Maximum time to wait for one acknowledgement.
+ACK_TIMEOUT_SECONDS = 2.0
+
+# Delay before resending a command.
+RETRY_DELAY_SECONDS = 1.0
 
 
 def get_shared_secret() -> bytes:
@@ -53,24 +62,15 @@ def get_shared_secret() -> bytes:
     return secret.encode("utf-8")
 
 
-def utc_timestamp(
-    offset_seconds: int = 0,
-) -> str:
+def utc_timestamp() -> str:
     """
     Generate a Java-compatible UTC timestamp.
-
-    A negative offset creates a stale timestamp.
-    A positive offset creates a future timestamp.
     """
 
-    timestamp = (
+    return (
         datetime.now(timezone.utc)
-        + timedelta(seconds=offset_seconds)
-    )
-
-    return timestamp.isoformat().replace(
-        "+00:00",
-        "Z",
+        .isoformat()
+        .replace("+00:00", "Z")
     )
 
 
@@ -124,10 +124,9 @@ def create_command(
     sequence_number: int,
     shared_secret: bytes,
     payload: dict | None = None,
-    timestamp_offset_seconds: int = 0,
 ) -> dict:
     """
-    Create and sign one command.
+    Create and authenticate one immutable command dictionary.
     """
 
     command = {
@@ -135,9 +134,7 @@ def create_command(
         "command_type": command_type,
         "target_id": TARGET_ID,
         "sequence_number": sequence_number,
-        "timestamp": utc_timestamp(
-            timestamp_offset_seconds
-        ),
+        "timestamp": utc_timestamp(),
         "payload": payload or {},
     }
 
@@ -149,12 +146,14 @@ def create_command(
     return command
 
 
-def send_command(
-    socket_file,
+def send_one_attempt(
     command: dict,
 ) -> dict:
     """
-    Send one command and wait for one acknowledgement.
+    Open one TCP connection, send one command, and read one ACK.
+
+    A fresh connection per attempt allows recovery when the previous
+    connection was closed before the ACK reached the client.
     """
 
     command_json = json.dumps(
@@ -162,51 +161,133 @@ def send_command(
         separators=(",", ":"),
     )
 
-    print(
-        f"[SENT] {command_json}"
-    )
+    with socket.socket(
+        socket.AF_INET,
+        socket.SOCK_STREAM,
+    ) as client_socket:
 
-    socket_file.write(
-        f"{command_json}\n"
-    )
-
-    socket_file.flush()
-
-    acknowledgement_line = socket_file.readline()
-
-    if acknowledgement_line == "":
-        raise ConnectionError(
-            "The Java server closed the connection "
-            "before sending an ACK."
+        client_socket.settimeout(
+            ACK_TIMEOUT_SECONDS
         )
 
-    acknowledgement = json.loads(
-        acknowledgement_line
-    )
+        client_socket.connect(
+            (SERVER_HOST, SERVER_PORT)
+        )
 
-    print(
-        "[ACK] "
-        f"Status: {acknowledgement['status']} | "
-        f"Command: {acknowledgement['commandType']} | "
-        f"State: {acknowledgement['previousState']} "
-        f"-> {acknowledgement['currentState']}"
-    )
+        with client_socket.makefile(
+            mode="rw",
+            encoding="utf-8",
+            newline="\n",
+        ) as socket_file:
 
-    print(
-        f"      {acknowledgement['message']}"
-    )
+            print(
+                f"[SENT] {command_json}"
+            )
 
-    print(
-        "------------------------------------------------------------"
-    )
+            socket_file.write(
+                f"{command_json}\n"
+            )
 
-    return acknowledgement
+            socket_file.flush()
+
+            acknowledgement_line = (
+                socket_file.readline()
+            )
+
+            if acknowledgement_line == "":
+                raise ConnectionError(
+                    "The connection closed before an ACK was received."
+                )
+
+            return json.loads(
+                acknowledgement_line
+            )
+
+
+def send_command_with_retry(
+    command: dict,
+) -> dict:
+    """
+    Send one command and retry when its acknowledgement is lost.
+
+    Every retry uses the exact same:
+    - message ID
+    - sequence number
+    - timestamp
+    - payload
+    - signature
+
+    This allows the Java server to recognize an idempotent retry.
+    """
+
+    last_error: Exception | None = None
+
+    for attempt_number in range(
+        1,
+        MAX_ACK_ATTEMPTS + 1,
+    ):
+        print(
+            f"[ATTEMPT {attempt_number}/{MAX_ACK_ATTEMPTS}] "
+            f"{command['message_id']}"
+        )
+
+        try:
+            acknowledgement = send_one_attempt(
+                command
+            )
+
+            print(
+                "[ACK] "
+                f"Status: {acknowledgement['status']} | "
+                f"Command: {acknowledgement['commandType']} | "
+                f"State: {acknowledgement['previousState']} "
+                f"-> {acknowledgement['currentState']}"
+            )
+
+            print(
+                f"      {acknowledgement['message']}"
+            )
+
+            print(
+                "------------------------------------------------------------"
+            )
+
+            return acknowledgement
+
+        except (
+            socket.timeout,
+            ConnectionError,
+            ConnectionResetError,
+            BrokenPipeError,
+            OSError,
+            json.JSONDecodeError,
+        ) as error:
+            last_error = error
+
+            print(
+                "[ACK NOT RECEIVED] "
+                f"{command['message_id']} | {error}"
+            )
+
+            if attempt_number < MAX_ACK_ATTEMPTS:
+                print(
+                    "Retrying the identical authenticated command "
+                    f"in {RETRY_DELAY_SECONDS} second(s)..."
+                )
+
+                time.sleep(
+                    RETRY_DELAY_SECONDS
+                )
+
+    raise ConnectionError(
+        f"No valid acknowledgement was received after "
+        f"{MAX_ACK_ATTEMPTS} attempts. Last error: {last_error}"
+    )
 
 
 def main() -> None:
     """
-    Demonstrate normal, duplicate, replayed, expired,
-    and future-dated command handling.
+    Demonstrate reliable command acknowledgements and retries.
     """
 
     try:
@@ -215,61 +296,27 @@ def main() -> None:
         print(
             f"Configuration error: {error}"
         )
+
         return
 
-    # First valid command.
-    start_command = create_command(
-        "CMD-000001",
-        "START_SYSTEM",
-        1,
-        shared_secret,
-    )
-
     commands = [
-        # Accepted: OFFLINE -> STANDBY.
-        start_command,
-
-        # Exact duplicate message ID and sequence number.
-        start_command.copy(),
-
-        # New message ID but replayed sequence number 1.
         create_command(
-            "CMD-000002",
-            "ACTIVATE_SYSTEM",
+            "CMD-000001",
+            "START_SYSTEM",
             1,
             shared_secret,
         ),
-
-        # Correct next sequence, but timestamp is 60 seconds old.
+        create_command(
+            "CMD-000002",
+            "ACTIVATE_SYSTEM",
+            2,
+            shared_secret,
+            {
+                "operation": "PRIMARY_SENSOR_SCAN",
+            },
+        ),
         create_command(
             "CMD-000003",
-            "ACTIVATE_SYSTEM",
-            2,
-            shared_secret,
-            timestamp_offset_seconds=-60,
-        ),
-
-        # Correct next sequence, but timestamp is 60 seconds ahead.
-        create_command(
-            "CMD-000004",
-            "ACTIVATE_SYSTEM",
-            2,
-            shared_secret,
-            timestamp_offset_seconds=60,
-        ),
-
-        # Accepted: STANDBY -> ACTIVE.
-        create_command(
-            "CMD-000005",
-            "ACTIVATE_SYSTEM",
-            2,
-            shared_secret,
-            {"operation": "PRIMARY_SENSOR_SCAN"},
-        ),
-
-        # Accepted: ACTIVE -> OFFLINE.
-        create_command(
-            "CMD-000006",
             "SHUTDOWN_SYSTEM",
             3,
             shared_secret,
@@ -281,11 +328,19 @@ def main() -> None:
     )
 
     print(
-        "Replay-Protected Python Control Station"
+        "Reliable Python Control Station"
     )
 
     print(
-        f"Connecting to {SERVER_HOST}:{SERVER_PORT}..."
+        f"Connecting to {SERVER_HOST}:{SERVER_PORT}"
+    )
+
+    print(
+        f"ACK timeout: {ACK_TIMEOUT_SECONDS} seconds"
+    )
+
+    print(
+        f"Maximum attempts: {MAX_ACK_ATTEMPTS}"
     )
 
     print(
@@ -293,60 +348,23 @@ def main() -> None:
     )
 
     try:
-        with socket.socket(
-            socket.AF_INET,
-            socket.SOCK_STREAM,
-        ) as client_socket:
-
-            client_socket.settimeout(
-                5.0
+        for command in commands:
+            send_command_with_retry(
+                command
             )
 
-            client_socket.connect(
-                (SERVER_HOST, SERVER_PORT)
+            time.sleep(
+                0.5
             )
-
-            print(
-                "Connected to Java remote unit."
-            )
-
-            print(
-                "------------------------------------------------------------"
-            )
-
-            with client_socket.makefile(
-                mode="rw",
-                encoding="utf-8",
-                newline="\n",
-            ) as socket_file:
-
-                for command in commands:
-                    send_command(
-                        socket_file,
-                        command,
-                    )
-
-                    time.sleep(
-                        0.5
-                    )
 
     except ConnectionRefusedError:
         print(
             "Connection failed. Start the Java server first."
         )
 
-    except socket.timeout:
+    except ConnectionError as error:
         print(
-            "Timed out while waiting for the Java server."
-        )
-
-    except (
-        ConnectionError,
-        json.JSONDecodeError,
-        OSError,
-    ) as error:
-        print(
-            f"Control-station error: {error}"
+            f"Command delivery failed: {error}"
         )
 
     print(

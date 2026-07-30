@@ -20,43 +20,58 @@ import java.io.OutputStreamWriter;
 import java.net.ServerSocket;
 import java.net.Socket;
 import java.nio.charset.StandardCharsets;
+import java.util.HashSet;
+import java.util.Optional;
+import java.util.Set;
 
 /**
- * TCP server that receives authenticated and replay-protected
- * JSON commands and returns JSON acknowledgements.
+ * TCP server that receives authenticated, replay-protected commands
+ * and supports reliable acknowledgement retries.
  */
 public final class CommandServer {
 
     // TCP port shared with the Python control station.
     public static final int DEFAULT_PORT = 6060;
 
+    // Optional development setting used to simulate one lost ACK.
+    public static final String DROP_ACK_ENVIRONMENT_VARIABLE =
+        "COMMAND_CONTROL_DROP_FIRST_ACK_MESSAGE_ID";
+
     private final CommandMessageParser commandParser;
     private final CommandProcessor commandProcessor;
     private final MessageAuthenticator messageAuthenticator;
     private final ReplayProtectionService replayProtectionService;
+    private final AcknowledgementCache acknowledgementCache;
     private final ObjectMapper objectMapper;
+    private final Set<String> intentionallyDroppedAcknowledgements;
+
     private final int port;
+    private final String messageIdWhoseFirstAckShouldBeDropped;
 
     /**
-     * Create a server using default production dependencies.
+     * Create a server using production dependencies.
      */
     public CommandServer() {
         this(
             DEFAULT_PORT,
             MessageAuthenticator.fromEnvironment(),
-            new ReplayProtectionService()
+            new ReplayProtectionService(),
+            new AcknowledgementCache(),
+            System.getenv(DROP_ACK_ENVIRONMENT_VARIABLE)
         );
     }
 
     /**
-     * Create a server with explicit security dependencies.
+     * Create a server with explicit dependencies.
      *
-     * This constructor will support future automated tests.
+     * This constructor also supports future automated tests.
      */
     public CommandServer(
         final int port,
         final MessageAuthenticator messageAuthenticator,
-        final ReplayProtectionService replayProtectionService
+        final ReplayProtectionService replayProtectionService,
+        final AcknowledgementCache acknowledgementCache,
+        final String messageIdWhoseFirstAckShouldBeDropped
     ) {
         if (port < 1 || port > 65535) {
             throw new IllegalArgumentException(
@@ -76,22 +91,43 @@ public final class CommandServer {
             );
         }
 
+        if (acknowledgementCache == null) {
+            throw new IllegalArgumentException(
+                "acknowledgementCache cannot be null"
+            );
+        }
+
         this.port = port;
         this.commandParser = new CommandMessageParser();
         this.commandProcessor = new CommandProcessor();
         this.messageAuthenticator = messageAuthenticator;
         this.replayProtectionService =
             replayProtectionService;
+        this.acknowledgementCache =
+            acknowledgementCache;
         this.objectMapper = new ObjectMapper();
+        this.intentionallyDroppedAcknowledgements =
+            new HashSet<>();
+
+        if (
+            messageIdWhoseFirstAckShouldBeDropped == null
+            || messageIdWhoseFirstAckShouldBeDropped.isBlank()
+        ) {
+            this.messageIdWhoseFirstAckShouldBeDropped = null;
+        } else {
+            this.messageIdWhoseFirstAckShouldBeDropped =
+                messageIdWhoseFirstAckShouldBeDropped.trim();
+        }
     }
 
     /**
      * Start the TCP command server.
      */
     public void start() throws IOException {
-        try (ServerSocket serverSocket =
-                 new ServerSocket(port)) {
-
+        try (
+            ServerSocket serverSocket =
+                new ServerSocket(port)
+        ) {
             System.out.println(
                 "TCP command server listening on port "
                     + port + "."
@@ -106,12 +142,27 @@ public final class CommandServer {
             );
 
             System.out.println(
+                "ACK retry and idempotency support enabled."
+            );
+
+            System.out.println(
                 "Maximum command age: "
                     + ReplayProtectionService
                         .DEFAULT_MAXIMUM_MESSAGE_AGE
                         .toSeconds()
                     + " seconds."
             );
+
+            if (
+                messageIdWhoseFirstAckShouldBeDropped
+                    != null
+            ) {
+                System.out.println(
+                    "Development ACK-loss simulation enabled for "
+                        + messageIdWhoseFirstAckShouldBeDropped
+                        + "."
+                );
+            }
 
             System.out.println(
                 "Waiting for Python control station..."
@@ -122,9 +173,7 @@ public final class CommandServer {
                     final Socket clientSocket =
                         serverSocket.accept();
 
-                    handleClient(
-                        clientSocket
-                    );
+                    handleClient(clientSocket);
                 } catch (IOException error) {
                     System.err.println(
                         "[CLIENT ERROR] "
@@ -140,7 +189,7 @@ public final class CommandServer {
     }
 
     /**
-     * Handle one connected Python control station.
+     * Handle commands from one connected control station.
      */
     private void handleClient(
         final Socket clientSocket
@@ -167,7 +216,9 @@ public final class CommandServer {
 
             String jsonLine;
 
-            while ((jsonLine = reader.readLine()) != null) {
+            while (
+                (jsonLine = reader.readLine()) != null
+            ) {
                 if (jsonLine.isBlank()) {
                     continue;
                 }
@@ -178,6 +229,26 @@ public final class CommandServer {
 
                 final CommandAcknowledgement acknowledgement =
                     processCommand(jsonLine);
+
+                // This development-only branch simulates an ACK that
+                // was lost after the command had already been processed.
+                if (
+                    shouldDropAcknowledgement(
+                        acknowledgement.getMessageId()
+                    )
+                ) {
+                    System.out.println(
+                        "[ACK DROPPED FOR TEST] "
+                            + acknowledgement.getMessageId()
+                    );
+
+                    System.out.println(
+                        "Closing the connection to simulate "
+                            + "acknowledgement loss."
+                    );
+
+                    return;
+                }
 
                 sendAcknowledgement(
                     writer,
@@ -201,7 +272,7 @@ public final class CommandServer {
             final CommandMessage command =
                 commandParser.parse(jsonMessage);
 
-            // HMAC verification must occur before replay-state updates.
+            // Authentication always occurs before retry handling.
             if (!messageAuthenticator.verify(command)) {
                 System.out.println(
                     "[AUTHENTICATION FAILED] "
@@ -221,8 +292,52 @@ public final class CommandServer {
                     + command.getMessageId()
             );
 
-            // Reject duplicates, stale timestamps, future timestamps,
-            // and non-increasing sequence numbers.
+            // A processed message ID may represent an ACK retry.
+            if (
+                acknowledgementCache.contains(
+                    command.getMessageId()
+                )
+            ) {
+                if (
+                    acknowledgementCache.signatureMatches(
+                        command.getMessageId(),
+                        command.getSignature()
+                    )
+                ) {
+                    final Optional<CommandAcknowledgement>
+                        cachedAcknowledgement =
+                            acknowledgementCache
+                                .findAcknowledgement(
+                                    command.getMessageId()
+                                );
+
+                    if (cachedAcknowledgement.isPresent()) {
+                        System.out.println(
+                            "[IDEMPOTENT RETRY] "
+                                + command.getMessageId()
+                                + " | Returning cached ACK."
+                        );
+
+                        return cachedAcknowledgement.get();
+                    }
+                }
+
+                System.out.println(
+                    "[SECURITY REJECTED] "
+                        + command.getMessageId()
+                        + " | MESSAGE_ID_COLLISION"
+                );
+
+                return CommandAcknowledgement.securityRejected(
+                    command.getMessageId(),
+                    command.getCommandType().name(),
+                    "MESSAGE_ID_COLLISION",
+                    "The message ID was previously used "
+                        + "with different authenticated content.",
+                    commandProcessor.getCurrentState()
+                );
+            }
+
             final SecurityValidationResult securityResult =
                 replayProtectionService.validateAndRecord(
                     command
@@ -259,9 +374,18 @@ public final class CommandServer {
 
             System.out.println(result);
 
-            return CommandAcknowledgement.fromResult(
-                result
+            final CommandAcknowledgement acknowledgement =
+                CommandAcknowledgement.fromResult(result);
+
+            // Store the completed result before attempting network send.
+            // If sending fails, a retry receives this exact result.
+            acknowledgementCache.store(
+                command.getMessageId(),
+                command.getSignature(),
+                acknowledgement
             );
+
+            return acknowledgement;
         } catch (CommandValidationException error) {
             System.out.println(
                 "[INVALID COMMAND] "
@@ -286,6 +410,28 @@ public final class CommandServer {
     }
 
     /**
+     * Determine whether the first ACK for one configured command
+     * should intentionally be dropped.
+     */
+    private synchronized boolean shouldDropAcknowledgement(
+        final String messageId
+    ) {
+        if (
+            messageIdWhoseFirstAckShouldBeDropped == null
+            || !messageIdWhoseFirstAckShouldBeDropped.equals(
+                messageId
+            )
+        ) {
+            return false;
+        }
+
+        // add() returns true only the first time the ID is inserted.
+        return intentionallyDroppedAcknowledgements.add(
+            messageId
+        );
+    }
+
+    /**
      * Serialize and send one JSON acknowledgement.
      */
     private void sendAcknowledgement(
@@ -306,10 +452,7 @@ public final class CommandServer {
             );
         }
 
-        writer.write(
-            acknowledgementJson
-        );
-
+        writer.write(acknowledgementJson);
         writer.newLine();
         writer.flush();
 
