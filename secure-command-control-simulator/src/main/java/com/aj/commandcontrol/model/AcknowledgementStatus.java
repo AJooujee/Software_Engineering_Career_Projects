@@ -21,7 +21,12 @@ public enum AcknowledgementStatus {
     INVALID,
 
     /**
-     * The message failed cryptographic authentication.
+     * The HMAC signature could not be verified.
      */
-    UNAUTHORIZED
+    UNAUTHORIZED,
+
+    /**
+     * The authenticated command failed replay or timestamp validation.
+     */
+    SECURITY_REJECTED
 }

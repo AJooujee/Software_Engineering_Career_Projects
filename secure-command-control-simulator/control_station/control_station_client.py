@@ -1,36 +1,37 @@
-# Import hashlib for the SHA-256 digest used by HMAC.
+# Import hashlib for SHA-256.
 import hashlib
 
-# Import hmac to authenticate outgoing commands.
+# Import hmac to authenticate commands.
 import hmac
 
-# Import json to serialize commands and acknowledgements.
+# Import json for command and acknowledgement serialization.
 import json
 
-# Import os to read the shared secret from an environment variable.
+# Import os to read the shared secret.
 import os
 
 # Import socket for TCP communication.
 import socket
 
-# Import time to delay commands during the demonstration.
+# Import time for demonstration delays.
 import time
 
-# Import datetime utilities to generate UTC timestamps.
-from datetime import datetime, timezone
+# Import datetime utilities for current, old, and future timestamps.
+from datetime import datetime, timedelta, timezone
 
 
 SERVER_HOST = "127.0.0.1"
 SERVER_PORT = 6060
 TARGET_ID = "UNIT-01"
 
-# Java and Python must use the same environment variable.
-SECRET_ENVIRONMENT_VARIABLE = "COMMAND_CONTROL_SHARED_SECRET"
+SECRET_ENVIRONMENT_VARIABLE = (
+    "COMMAND_CONTROL_SHARED_SECRET"
+)
 
 
 def get_shared_secret() -> bytes:
     """
-    Read and validate the shared authentication secret.
+    Read and validate the shared HMAC secret.
     """
 
     secret = os.getenv(
@@ -39,7 +40,8 @@ def get_shared_secret() -> bytes:
 
     if not secret:
         raise RuntimeError(
-            f"Environment variable {SECRET_ENVIRONMENT_VARIABLE} "
+            f"Environment variable "
+            f"{SECRET_ENVIRONMENT_VARIABLE} "
             "is not configured."
         )
 
@@ -51,16 +53,34 @@ def get_shared_secret() -> bytes:
     return secret.encode("utf-8")
 
 
+def utc_timestamp(
+    offset_seconds: int = 0,
+) -> str:
+    """
+    Generate a Java-compatible UTC timestamp.
+
+    A negative offset creates a stale timestamp.
+    A positive offset creates a future timestamp.
+    """
+
+    timestamp = (
+        datetime.now(timezone.utc)
+        + timedelta(seconds=offset_seconds)
+    )
+
+    return timestamp.isoformat().replace(
+        "+00:00",
+        "Z",
+    )
+
+
 def create_canonical_message(
     command: dict,
 ) -> str:
     """
-    Create the exact text signed by both Python and Java.
-
-    The signature field is excluded from this representation.
+    Create the exact message representation signed by Java and Python.
     """
 
-    # Sorting payload keys guarantees deterministic JSON ordering.
     payload_json = json.dumps(
         command["payload"],
         sort_keys=True,
@@ -104,10 +124,10 @@ def create_command(
     sequence_number: int,
     shared_secret: bytes,
     payload: dict | None = None,
-    tamper_signature: bool = False,
+    timestamp_offset_seconds: int = 0,
 ) -> dict:
     """
-    Create and sign one command message.
+    Create and sign one command.
     """
 
     command = {
@@ -115,26 +135,16 @@ def create_command(
         "command_type": command_type,
         "target_id": TARGET_ID,
         "sequence_number": sequence_number,
-
-        # Java Instant.toString() uses the Z suffix for UTC.
-        # Matching this format ensures both systems sign identical text.
-        "timestamp": datetime.now(
-            timezone.utc
-        ).isoformat().replace("+00:00", "Z"),
-
+        "timestamp": utc_timestamp(
+            timestamp_offset_seconds
+        ),
         "payload": payload or {},
     }
 
-    signature = calculate_signature(
+    command["signature"] = calculate_signature(
         command,
         shared_secret,
     )
-
-    # Replace the real signature to demonstrate authentication failure.
-    if tamper_signature:
-        signature = "0" * 64
-
-    command["signature"] = signature
 
     return command
 
@@ -144,7 +154,7 @@ def send_command(
     command: dict,
 ) -> dict:
     """
-    Send one signed JSON command and wait for its acknowledgement.
+    Send one command and wait for one acknowledgement.
     """
 
     command_json = json.dumps(
@@ -159,13 +169,15 @@ def send_command(
     socket_file.write(
         f"{command_json}\n"
     )
+
     socket_file.flush()
 
     acknowledgement_line = socket_file.readline()
 
     if acknowledgement_line == "":
         raise ConnectionError(
-            "The Java server closed the connection before sending an ACK."
+            "The Java server closed the connection "
+            "before sending an ACK."
         )
 
     acknowledgement = json.loads(
@@ -193,7 +205,8 @@ def send_command(
 
 def main() -> None:
     """
-    Send authenticated and deliberately tampered commands.
+    Demonstrate normal, duplicate, replayed, expired,
+    and future-dated command handling.
     """
 
     try:
@@ -204,45 +217,61 @@ def main() -> None:
         )
         return
 
+    # First valid command.
+    start_command = create_command(
+        "CMD-000001",
+        "START_SYSTEM",
+        1,
+        shared_secret,
+    )
+
     commands = [
+        # Accepted: OFFLINE -> STANDBY.
+        start_command,
+
+        # Exact duplicate message ID and sequence number.
+        start_command.copy(),
+
+        # New message ID but replayed sequence number 1.
         create_command(
-            "CMD-000001",
-            "START_SYSTEM",
+            "CMD-000002",
+            "ACTIVATE_SYSTEM",
             1,
             shared_secret,
         ),
+
+        # Correct next sequence, but timestamp is 60 seconds old.
         create_command(
-            "CMD-000002",
+            "CMD-000003",
+            "ACTIVATE_SYSTEM",
+            2,
+            shared_secret,
+            timestamp_offset_seconds=-60,
+        ),
+
+        # Correct next sequence, but timestamp is 60 seconds ahead.
+        create_command(
+            "CMD-000004",
+            "ACTIVATE_SYSTEM",
+            2,
+            shared_secret,
+            timestamp_offset_seconds=60,
+        ),
+
+        # Accepted: STANDBY -> ACTIVE.
+        create_command(
+            "CMD-000005",
             "ACTIVATE_SYSTEM",
             2,
             shared_secret,
             {"operation": "PRIMARY_SENSOR_SCAN"},
         ),
-        # This command has a deliberately invalid HMAC signature.
-        create_command(
-            "CMD-000003",
-            "ENTER_SAFE_MODE",
-            3,
-            shared_secret,
-            tamper_signature=True,
-        ),
-        # A correctly signed command should still work afterward.
-        create_command(
-            "CMD-000004",
-            "ENTER_SAFE_MODE",
-            4,
-            shared_secret,
-        ),
-        create_command(
-            "CMD-000005",
-            "RESET_SYSTEM",
-            5,
-            shared_secret,
-        ),
+
+        # Accepted: ACTIVE -> OFFLINE.
         create_command(
             "CMD-000006",
             "SHUTDOWN_SYSTEM",
-            6,
+            3,
             shared_secret,
         ),
     ]
@@ -250,12 +279,15 @@ def main() -> None:
     print(
         "============================================================"
     )
+
     print(
-        "Authenticated Python Control Station"
+        "Replay-Protected Python Control Station"
     )
+
     print(
         f"Connecting to {SERVER_HOST}:{SERVER_PORT}..."
     )
+
     print(
         "============================================================"
     )
@@ -277,6 +309,7 @@ def main() -> None:
             print(
                 "Connected to Java remote unit."
             )
+
             print(
                 "------------------------------------------------------------"
             )

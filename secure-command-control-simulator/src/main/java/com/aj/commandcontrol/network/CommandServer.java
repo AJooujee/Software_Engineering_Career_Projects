@@ -7,6 +7,8 @@ import com.aj.commandcontrol.parsing.CommandMessageParser;
 import com.aj.commandcontrol.parsing.CommandValidationException;
 import com.aj.commandcontrol.processing.CommandProcessor;
 import com.aj.commandcontrol.security.MessageAuthenticator;
+import com.aj.commandcontrol.security.ReplayProtectionService;
+import com.aj.commandcontrol.security.SecurityValidationResult;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 
@@ -20,8 +22,8 @@ import java.net.Socket;
 import java.nio.charset.StandardCharsets;
 
 /**
- * TCP server that receives authenticated JSON commands
- * and returns JSON acknowledgements.
+ * TCP server that receives authenticated and replay-protected
+ * JSON commands and returns JSON acknowledgements.
  */
 public final class CommandServer {
 
@@ -31,28 +33,30 @@ public final class CommandServer {
     private final CommandMessageParser commandParser;
     private final CommandProcessor commandProcessor;
     private final MessageAuthenticator messageAuthenticator;
+    private final ReplayProtectionService replayProtectionService;
     private final ObjectMapper objectMapper;
     private final int port;
 
     /**
-     * Create a server using the default port and the secret
-     * stored in COMMAND_CONTROL_SHARED_SECRET.
+     * Create a server using default production dependencies.
      */
     public CommandServer() {
         this(
             DEFAULT_PORT,
-            MessageAuthenticator.fromEnvironment()
+            MessageAuthenticator.fromEnvironment(),
+            new ReplayProtectionService()
         );
     }
 
     /**
-     * Create a server with explicit dependencies.
+     * Create a server with explicit security dependencies.
      *
-     * This constructor will also support future automated tests.
+     * This constructor will support future automated tests.
      */
     public CommandServer(
         final int port,
-        final MessageAuthenticator messageAuthenticator
+        final MessageAuthenticator messageAuthenticator,
+        final ReplayProtectionService replayProtectionService
     ) {
         if (port < 1 || port > 65535) {
             throw new IllegalArgumentException(
@@ -66,24 +70,49 @@ public final class CommandServer {
             );
         }
 
+        if (replayProtectionService == null) {
+            throw new IllegalArgumentException(
+                "replayProtectionService cannot be null"
+            );
+        }
+
         this.port = port;
         this.commandParser = new CommandMessageParser();
         this.commandProcessor = new CommandProcessor();
         this.messageAuthenticator = messageAuthenticator;
+        this.replayProtectionService =
+            replayProtectionService;
         this.objectMapper = new ObjectMapper();
     }
 
     /**
-     * Start the TCP server.
+     * Start the TCP command server.
      */
     public void start() throws IOException {
-        try (ServerSocket serverSocket = new ServerSocket(port)) {
+        try (ServerSocket serverSocket =
+                 new ServerSocket(port)) {
+
             System.out.println(
-                "TCP command server listening on port " + port + "."
+                "TCP command server listening on port "
+                    + port + "."
             );
+
             System.out.println(
                 "HMAC-SHA256 authentication enabled."
             );
+
+            System.out.println(
+                "Replay and timestamp protection enabled."
+            );
+
+            System.out.println(
+                "Maximum command age: "
+                    + ReplayProtectionService
+                        .DEFAULT_MAXIMUM_MESSAGE_AGE
+                        .toSeconds()
+                    + " seconds."
+            );
+
             System.out.println(
                 "Waiting for Python control station..."
             );
@@ -98,7 +127,8 @@ public final class CommandServer {
                     );
                 } catch (IOException error) {
                     System.err.println(
-                        "[CLIENT ERROR] " + error.getMessage()
+                        "[CLIENT ERROR] "
+                            + error.getMessage()
                     );
                 }
 
@@ -162,7 +192,7 @@ public final class CommandServer {
     }
 
     /**
-     * Parse, authenticate, and process one command.
+     * Parse, authenticate, replay-check, and process one command.
      */
     private CommandAcknowledgement processCommand(
         final String jsonMessage
@@ -171,7 +201,7 @@ public final class CommandServer {
             final CommandMessage command =
                 commandParser.parse(jsonMessage);
 
-            // Authentication happens before state-machine processing.
+            // HMAC verification must occur before replay-state updates.
             if (!messageAuthenticator.verify(command)) {
                 System.out.println(
                     "[AUTHENTICATION FAILED] "
@@ -187,7 +217,41 @@ public final class CommandServer {
             }
 
             System.out.println(
-                "[AUTHENTICATED] " + command.getMessageId()
+                "[AUTHENTICATED] "
+                    + command.getMessageId()
+            );
+
+            // Reject duplicates, stale timestamps, future timestamps,
+            // and non-increasing sequence numbers.
+            final SecurityValidationResult securityResult =
+                replayProtectionService.validateAndRecord(
+                    command
+                );
+
+            if (!securityResult.isAccepted()) {
+                System.out.println(
+                    "[SECURITY REJECTED] "
+                        + command.getMessageId()
+                        + " | "
+                        + securityResult.getCode()
+                        + " | "
+                        + securityResult.getMessage()
+                );
+
+                return CommandAcknowledgement.securityRejected(
+                    command.getMessageId(),
+                    command.getCommandType().name(),
+                    securityResult.getCode(),
+                    securityResult.getMessage(),
+                    commandProcessor.getCurrentState()
+                );
+            }
+
+            System.out.println(
+                "[SECURITY ACCEPTED] "
+                    + command.getMessageId()
+                    + " | Sequence: "
+                    + command.getSequenceNumber()
             );
 
             final CommandResult result =
@@ -200,7 +264,8 @@ public final class CommandServer {
             );
         } catch (CommandValidationException error) {
             System.out.println(
-                "[INVALID COMMAND] " + error.getMessage()
+                "[INVALID COMMAND] "
+                    + error.getMessage()
             );
 
             return CommandAcknowledgement.invalid(
@@ -209,7 +274,8 @@ public final class CommandServer {
             );
         } catch (RuntimeException error) {
             System.err.println(
-                "[PROCESSING ERROR] " + error.getMessage()
+                "[PROCESSING ERROR] "
+                    + error.getMessage()
             );
 
             return CommandAcknowledgement.invalid(
@@ -220,7 +286,7 @@ public final class CommandServer {
     }
 
     /**
-     * Serialize and send one acknowledgement.
+     * Serialize and send one JSON acknowledgement.
      */
     private void sendAcknowledgement(
         final BufferedWriter writer,
@@ -243,12 +309,14 @@ public final class CommandServer {
         writer.write(
             acknowledgementJson
         );
+
         writer.newLine();
         writer.flush();
 
         System.out.println(
             "[ACK SENT] " + acknowledgementJson
         );
+
         System.out.println(
             "------------------------------------------------------------"
         );

@@ -133,6 +133,27 @@ public final class CommandAcknowledgement {
         );
     }
 
+        /**
+     * Create an acknowledgement for an authenticated command
+     * rejected by replay or timestamp validation.
+     */
+    public static CommandAcknowledgement securityRejected(
+        final String messageId,
+        final String commandType,
+        final String securityCode,
+        final String message,
+        final RemoteUnitState currentState
+    ) {
+        return new CommandAcknowledgement(
+            messageId,
+            AcknowledgementStatus.SECURITY_REJECTED,
+            commandType,
+            currentState.name(),
+            currentState.name(),
+            securityCode + ": " + message
+        );
+    }
+
     /**
      * Create an acknowledgement for an invalid JSON command.
      *
