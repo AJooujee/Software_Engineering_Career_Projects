@@ -2,11 +2,9 @@ package com.aj.commandcontrol;
 
 import com.aj.commandcontrol.model.CommandMessage;
 import com.aj.commandcontrol.model.CommandResult;
-import com.aj.commandcontrol.model.CommandType;
+import com.aj.commandcontrol.parsing.CommandMessageParser;
+import com.aj.commandcontrol.parsing.CommandValidationException;
 import com.aj.commandcontrol.processing.CommandProcessor;
-
-import java.time.Instant;
-import java.util.Collections;
 
 /**
  * Entry point for the Secure Command-and-Control
@@ -15,20 +13,24 @@ import java.util.Collections;
 public final class CommandControlApplication {
 
     /**
-     * Prevent object creation because this class only contains
-     * the application entry point.
+     * Prevent object creation because this class contains
+     * only the application entry point.
      */
     private CommandControlApplication() {
     }
 
     /**
-     * Start the command-control simulator and demonstrate
-     * deterministic state transitions.
+     * Demonstrate JSON parsing, command validation,
+     * and state-machine processing.
      *
      * @param args command-line arguments
      */
     public static void main(final String[] args) {
-        final CommandProcessor processor = new CommandProcessor();
+        final CommandMessageParser parser =
+            new CommandMessageParser();
+
+        final CommandProcessor processor =
+            new CommandProcessor();
 
         System.out.println(
             "============================================================"
@@ -37,61 +39,114 @@ public final class CommandControlApplication {
             "Secure Command-and-Control Message Processing Simulator"
         );
         System.out.println(
-            "Initial remote unit state: " + processor.getCurrentState()
+            "Initial remote unit state: "
+                + processor.getCurrentState()
         );
         System.out.println(
             "============================================================"
         );
 
-        long sequenceNumber = 1;
-
-        // Demonstrate a valid startup sequence.
-        sequenceNumber = executeCommand(
+        // Valid command: OFFLINE -> STANDBY.
+        processJsonCommand(
+            parser,
             processor,
-            CommandType.START_SYSTEM,
-            sequenceNumber
+            """
+            {
+              "message_id": "CMD-000001",
+              "command_type": "START_SYSTEM",
+              "target_id": "UNIT-01",
+              "sequence_number": 1,
+              "timestamp": "2026-07-30T19:00:00Z",
+              "payload": {}
+            }
+            """
         );
 
-        sequenceNumber = executeCommand(
+        // Valid command: STANDBY -> ACTIVE.
+        processJsonCommand(
+            parser,
             processor,
-            CommandType.ACTIVATE_SYSTEM,
-            sequenceNumber
+            """
+            {
+              "message_id": "CMD-000002",
+              "command_type": "ACTIVATE_SYSTEM",
+              "target_id": "UNIT-01",
+              "sequence_number": 2,
+              "timestamp": "2026-07-30T19:00:01Z",
+              "payload": {
+                "operation": "PRIMARY_SENSOR_SCAN"
+              }
+            }
+            """
         );
 
-        // Demonstrate an invalid transition.
-        sequenceNumber = executeCommand(
+        // Valid JSON but invalid state transition.
+        processJsonCommand(
+            parser,
             processor,
-            CommandType.START_SYSTEM,
-            sequenceNumber
+            """
+            {
+              "message_id": "CMD-000003",
+              "command_type": "START_SYSTEM",
+              "target_id": "UNIT-01",
+              "sequence_number": 3,
+              "timestamp": "2026-07-30T19:00:02Z",
+              "payload": {}
+            }
+            """
         );
 
-        // Demonstrate emergency safe-mode handling.
-        sequenceNumber = executeCommand(
+        // Invalid command type.
+        processJsonCommand(
+            parser,
             processor,
-            CommandType.ENTER_SAFE_MODE,
-            sequenceNumber
+            """
+            {
+              "message_id": "CMD-000004",
+              "command_type": "LAUNCH_UNKNOWN_OPERATION",
+              "target_id": "UNIT-01",
+              "sequence_number": 4,
+              "timestamp": "2026-07-30T19:00:03Z",
+              "payload": {}
+            }
+            """
         );
 
-        sequenceNumber = executeCommand(
+        // Missing required sequence_number field.
+        processJsonCommand(
+            parser,
             processor,
-            CommandType.RESET_SYSTEM,
-            sequenceNumber
+            """
+            {
+              "message_id": "CMD-000005",
+              "command_type": "STOP_SYSTEM",
+              "target_id": "UNIT-01",
+              "timestamp": "2026-07-30T19:00:04Z",
+              "payload": {}
+            }
+            """
         );
 
-        executeCommand(
+        // Malformed JSON.
+        processJsonCommand(
+            parser,
             processor,
-            CommandType.SHUTDOWN_SYSTEM,
-            sequenceNumber
+            """
+            {
+              "message_id": "CMD-000006",
+              "command_type": "STOP_SYSTEM"
+            """
         );
 
         System.out.println(
             "============================================================"
         );
         System.out.println(
-            "Final remote unit state: " + processor.getCurrentState()
+            "Final remote unit state: "
+                + processor.getCurrentState()
         );
         System.out.println(
-            "Phase 2 command model and state machine completed."
+            "Phase 3 JSON parsing and validation completed."
         );
         System.out.println(
             "============================================================"
@@ -99,28 +154,42 @@ public final class CommandControlApplication {
     }
 
     /**
-     * Create and process one demonstration command.
-     *
-     * @return the next sequence number
+     * Parse, validate, and process one JSON command.
      */
-    private static long executeCommand(
+    private static void processJsonCommand(
+        final CommandMessageParser parser,
         final CommandProcessor processor,
-        final CommandType commandType,
-        final long sequenceNumber
+        final String jsonMessage
     ) {
-        final CommandMessage command = new CommandMessage(
-            String.format("CMD-%06d", sequenceNumber),
-            commandType,
-            "UNIT-01",
-            sequenceNumber,
-            Instant.now(),
-            Collections.emptyMap()
+        try {
+            final CommandMessage command =
+                parser.parse(jsonMessage);
+
+            final CommandResult result =
+                processor.process(command);
+
+            System.out.println(
+                "[PARSED] "
+                    + command.getMessageId()
+                    + " | "
+                    + command.getCommandType()
+                    + " | Target: "
+                    + command.getTargetId()
+                    + " | Sequence: "
+                    + command.getSequenceNumber()
+            );
+
+            System.out.println(result);
+        } catch (CommandValidationException error) {
+            // Reject invalid input without terminating the application.
+            System.out.println(
+                "[INVALID COMMAND] "
+                    + error.getMessage()
+            );
+        }
+
+        System.out.println(
+            "------------------------------------------------------------"
         );
-
-        final CommandResult result = processor.process(command);
-
-        System.out.println(result);
-
-        return sequenceNumber + 1;
     }
 }
