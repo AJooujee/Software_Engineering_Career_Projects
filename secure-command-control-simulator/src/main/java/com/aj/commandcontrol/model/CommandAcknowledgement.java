@@ -113,6 +113,26 @@ public final class CommandAcknowledgement {
         );
     }
 
+        /**
+     * Create an acknowledgement for a command whose
+     * HMAC signature could not be verified.
+     */
+    public static CommandAcknowledgement unauthorized(
+        final String messageId,
+        final String commandType,
+        final String message,
+        final RemoteUnitState currentState
+    ) {
+        return new CommandAcknowledgement(
+            messageId,
+            AcknowledgementStatus.UNAUTHORIZED,
+            commandType,
+            currentState.name(),
+            currentState.name(),
+            message
+        );
+    }
+
     /**
      * Create an acknowledgement for an invalid JSON command.
      *

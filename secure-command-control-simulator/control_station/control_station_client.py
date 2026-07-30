@@ -1,55 +1,142 @@
-# Import json to serialize command dictionaries and parse acknowledgements.
+# Import hashlib for the SHA-256 digest used by HMAC.
+import hashlib
+
+# Import hmac to authenticate outgoing commands.
+import hmac
+
+# Import json to serialize commands and acknowledgements.
 import json
 
-# Import socket to communicate with the Java TCP server.
+# Import os to read the shared secret from an environment variable.
+import os
+
+# Import socket for TCP communication.
 import socket
 
-# Import time to generate small delays between commands.
+# Import time to delay commands during the demonstration.
 import time
 
 # Import datetime utilities to generate UTC timestamps.
 from datetime import datetime, timezone
 
 
-# IP address of the Java remote-unit server.
 SERVER_HOST = "127.0.0.1"
-
-# TCP port configured in CommandServer.java.
 SERVER_PORT = 6060
-
-# Remote unit that should receive the commands.
 TARGET_ID = "UNIT-01"
+
+# Java and Python must use the same environment variable.
+SECRET_ENVIRONMENT_VARIABLE = "COMMAND_CONTROL_SHARED_SECRET"
+
+
+def get_shared_secret() -> bytes:
+    """
+    Read and validate the shared authentication secret.
+    """
+
+    secret = os.getenv(
+        SECRET_ENVIRONMENT_VARIABLE
+    )
+
+    if not secret:
+        raise RuntimeError(
+            f"Environment variable {SECRET_ENVIRONMENT_VARIABLE} "
+            "is not configured."
+        )
+
+    if len(secret) < 16:
+        raise RuntimeError(
+            "The shared secret must contain at least 16 characters."
+        )
+
+    return secret.encode("utf-8")
+
+
+def create_canonical_message(
+    command: dict,
+) -> str:
+    """
+    Create the exact text signed by both Python and Java.
+
+    The signature field is excluded from this representation.
+    """
+
+    # Sorting payload keys guarantees deterministic JSON ordering.
+    payload_json = json.dumps(
+        command["payload"],
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+
+    return "\n".join(
+        [
+            command["message_id"],
+            command["command_type"],
+            command["target_id"],
+            str(command["sequence_number"]),
+            command["timestamp"],
+            payload_json,
+        ]
+    )
+
+
+def calculate_signature(
+    command: dict,
+    shared_secret: bytes,
+) -> str:
+    """
+    Calculate a lowercase hexadecimal HMAC-SHA256 signature.
+    """
+
+    canonical_message = create_canonical_message(
+        command
+    )
+
+    return hmac.new(
+        shared_secret,
+        canonical_message.encode("utf-8"),
+        hashlib.sha256,
+    ).hexdigest()
 
 
 def create_command(
     message_id: str,
     command_type: str,
     sequence_number: int,
+    shared_secret: bytes,
     payload: dict | None = None,
+    tamper_signature: bool = False,
 ) -> dict:
     """
-    Create one standardized command message.
+    Create and sign one command message.
     """
 
-    return {
-        # Unique identifier used later for duplicate protection.
+    command = {
         "message_id": message_id,
-
-        # State-machine command requested by the control station.
         "command_type": command_type,
-
-        # Intended remote unit.
         "target_id": TARGET_ID,
-
-        # Increasing value used later for replay protection.
         "sequence_number": sequence_number,
 
-        # Current UTC command creation time.
-        "timestamp": datetime.now(timezone.utc).isoformat(),
+        # Java Instant.toString() uses the Z suffix for UTC.
+        # Matching this format ensures both systems sign identical text.
+        "timestamp": datetime.now(
+            timezone.utc
+        ).isoformat().replace("+00:00", "Z"),
 
-        # Optional command-specific data.
         "payload": payload or {},
     }
+
+    signature = calculate_signature(
+        command,
+        shared_secret,
+    )
+
+    # Replace the real signature to demonstrate authentication failure.
+    if tamper_signature:
+        signature = "0" * 64
+
+    command["signature"] = signature
+
+    return command
 
 
 def send_command(
@@ -57,24 +144,23 @@ def send_command(
     command: dict,
 ) -> dict:
     """
-    Send one newline-delimited JSON command and wait for its ACK.
+    Send one signed JSON command and wait for its acknowledgement.
     """
 
-    # Serialize the command into compact JSON text.
     command_json = json.dumps(
         command,
         separators=(",", ":"),
     )
 
-    print(f"[SENT] {command_json}")
+    print(
+        f"[SENT] {command_json}"
+    )
 
-    # Write the JSON command followed by a newline.
     socket_file.write(
         f"{command_json}\n"
     )
     socket_file.flush()
 
-    # Read exactly one newline-delimited acknowledgement.
     acknowledgement_line = socket_file.readline()
 
     if acknowledgement_line == "":
@@ -93,9 +179,11 @@ def send_command(
         f"State: {acknowledgement['previousState']} "
         f"-> {acknowledgement['currentState']}"
     )
+
     print(
         f"      {acknowledgement['message']}"
     )
+
     print(
         "------------------------------------------------------------"
     )
@@ -105,48 +193,57 @@ def send_command(
 
 def main() -> None:
     """
-    Connect to the Java server and demonstrate end-to-end
-    command transmission and acknowledgement handling.
+    Send authenticated and deliberately tampered commands.
     """
+
+    try:
+        shared_secret = get_shared_secret()
+    except RuntimeError as error:
+        print(
+            f"Configuration error: {error}"
+        )
+        return
 
     commands = [
         create_command(
             "CMD-000001",
             "START_SYSTEM",
             1,
+            shared_secret,
         ),
         create_command(
             "CMD-000002",
             "ACTIVATE_SYSTEM",
             2,
+            shared_secret,
             {"operation": "PRIMARY_SENSOR_SCAN"},
         ),
-        # Valid JSON but invalid transition while ACTIVE.
+        # This command has a deliberately invalid HMAC signature.
         create_command(
             "CMD-000003",
-            "START_SYSTEM",
+            "ENTER_SAFE_MODE",
             3,
+            shared_secret,
+            tamper_signature=True,
         ),
+        # A correctly signed command should still work afterward.
         create_command(
             "CMD-000004",
             "ENTER_SAFE_MODE",
             4,
+            shared_secret,
         ),
         create_command(
             "CMD-000005",
             "RESET_SYSTEM",
             5,
+            shared_secret,
         ),
         create_command(
             "CMD-000006",
             "SHUTDOWN_SYSTEM",
             6,
-        ),
-        # Structurally valid JSON with an unsupported command type.
-        create_command(
-            "CMD-000007",
-            "UNKNOWN_OPERATION",
-            7,
+            shared_secret,
         ),
     ]
 
@@ -154,7 +251,7 @@ def main() -> None:
         "============================================================"
     )
     print(
-        "Python Control Station"
+        "Authenticated Python Control Station"
     )
     print(
         f"Connecting to {SERVER_HOST}:{SERVER_PORT}..."
@@ -164,16 +261,15 @@ def main() -> None:
     )
 
     try:
-        # Create an IPv4 TCP socket.
         with socket.socket(
             socket.AF_INET,
             socket.SOCK_STREAM,
         ) as client_socket:
 
-            # Fail instead of waiting forever for a network response.
-            client_socket.settimeout(5.0)
+            client_socket.settimeout(
+                5.0
+            )
 
-            # Connect to the Java command server.
             client_socket.connect(
                 (SERVER_HOST, SERVER_PORT)
             )
@@ -185,7 +281,6 @@ def main() -> None:
                 "------------------------------------------------------------"
             )
 
-            # Text-mode wrapper allows convenient newline-based messaging.
             with client_socket.makefile(
                 mode="rw",
                 encoding="utf-8",
@@ -198,13 +293,13 @@ def main() -> None:
                         command,
                     )
 
-                    # Small delay makes demonstration output easier to read.
-                    time.sleep(0.5)
+                    time.sleep(
+                        0.5
+                    )
 
     except ConnectionRefusedError:
         print(
-            "Connection failed. Start the Java server before "
-            "running the Python control station."
+            "Connection failed. Start the Java server first."
         )
 
     except socket.timeout:
@@ -226,6 +321,5 @@ def main() -> None:
     )
 
 
-# Run main only when this file is executed directly.
 if __name__ == "__main__":
     main()

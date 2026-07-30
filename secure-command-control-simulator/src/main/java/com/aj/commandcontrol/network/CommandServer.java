@@ -6,6 +6,7 @@ import com.aj.commandcontrol.model.CommandResult;
 import com.aj.commandcontrol.parsing.CommandMessageParser;
 import com.aj.commandcontrol.parsing.CommandValidationException;
 import com.aj.commandcontrol.processing.CommandProcessor;
+import com.aj.commandcontrol.security.MessageAuthenticator;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 
@@ -19,40 +20,39 @@ import java.net.Socket;
 import java.nio.charset.StandardCharsets;
 
 /**
- * TCP server that receives newline-delimited JSON commands,
- * processes them, and returns JSON acknowledgements.
+ * TCP server that receives authenticated JSON commands
+ * and returns JSON acknowledgements.
  */
 public final class CommandServer {
 
     // TCP port shared with the Python control station.
     public static final int DEFAULT_PORT = 6060;
 
-    // Parser used to validate incoming JSON command messages.
     private final CommandMessageParser commandParser;
-
-    // State machine shared across commands and client connections.
     private final CommandProcessor commandProcessor;
-
-    // Jackson serializer used to create acknowledgement JSON.
+    private final MessageAuthenticator messageAuthenticator;
     private final ObjectMapper objectMapper;
-
-    // Port on which the Java server listens.
     private final int port;
 
     /**
-     * Create a server using the default TCP port.
+     * Create a server using the default port and the secret
+     * stored in COMMAND_CONTROL_SHARED_SECRET.
      */
     public CommandServer() {
-        this(DEFAULT_PORT);
+        this(
+            DEFAULT_PORT,
+            MessageAuthenticator.fromEnvironment()
+        );
     }
 
     /**
-     * Create a command server on a specified port.
+     * Create a server with explicit dependencies.
      *
-     * @param port TCP listening port
+     * This constructor will also support future automated tests.
      */
     public CommandServer(
-        final int port
+        final int port,
+        final MessageAuthenticator messageAuthenticator
     ) {
         if (port < 1 || port > 65535) {
             throw new IllegalArgumentException(
@@ -60,16 +60,21 @@ public final class CommandServer {
             );
         }
 
+        if (messageAuthenticator == null) {
+            throw new IllegalArgumentException(
+                "messageAuthenticator cannot be null"
+            );
+        }
+
         this.port = port;
         this.commandParser = new CommandMessageParser();
         this.commandProcessor = new CommandProcessor();
+        this.messageAuthenticator = messageAuthenticator;
         this.objectMapper = new ObjectMapper();
     }
 
     /**
-     * Start the TCP server and continuously accept control-station clients.
-     *
-     * @throws IOException when the listening socket cannot be created
+     * Start the TCP server.
      */
     public void start() throws IOException {
         try (ServerSocket serverSocket = new ServerSocket(port)) {
@@ -77,19 +82,21 @@ public final class CommandServer {
                 "TCP command server listening on port " + port + "."
             );
             System.out.println(
+                "HMAC-SHA256 authentication enabled."
+            );
+            System.out.println(
                 "Waiting for Python control station..."
             );
 
-            // Continue accepting clients after one client disconnects.
             while (true) {
                 try {
                     final Socket clientSocket =
                         serverSocket.accept();
 
-                    handleClient(clientSocket);
+                    handleClient(
+                        clientSocket
+                    );
                 } catch (IOException error) {
-                    // A client-level error should not permanently stop
-                    // the main server from accepting future connections.
                     System.err.println(
                         "[CLIENT ERROR] " + error.getMessage()
                     );
@@ -103,12 +110,7 @@ public final class CommandServer {
     }
 
     /**
-     * Receive and process commands from one connected control station.
-     *
-     * Each command and acknowledgement occupies one line of UTF-8 JSON.
-     *
-     * @param clientSocket connected TCP client
-     * @throws IOException when socket communication fails
+     * Handle one connected Python control station.
      */
     private void handleClient(
         final Socket clientSocket
@@ -135,7 +137,6 @@ public final class CommandServer {
 
             String jsonLine;
 
-            // readLine() matches the newline delimiter added by Python.
             while ((jsonLine = reader.readLine()) != null) {
                 if (jsonLine.isBlank()) {
                     continue;
@@ -161,8 +162,7 @@ public final class CommandServer {
     }
 
     /**
-     * Parse and process one command without allowing an invalid
-     * message to terminate the TCP server.
+     * Parse, authenticate, and process one command.
      */
     private CommandAcknowledgement processCommand(
         final String jsonMessage
@@ -170,6 +170,25 @@ public final class CommandServer {
         try {
             final CommandMessage command =
                 commandParser.parse(jsonMessage);
+
+            // Authentication happens before state-machine processing.
+            if (!messageAuthenticator.verify(command)) {
+                System.out.println(
+                    "[AUTHENTICATION FAILED] "
+                        + command.getMessageId()
+                );
+
+                return CommandAcknowledgement.unauthorized(
+                    command.getMessageId(),
+                    command.getCommandType().name(),
+                    "HMAC-SHA256 signature verification failed.",
+                    commandProcessor.getCurrentState()
+                );
+            }
+
+            System.out.println(
+                "[AUTHENTICATED] " + command.getMessageId()
+            );
 
             final CommandResult result =
                 commandProcessor.process(command);
@@ -189,8 +208,6 @@ public final class CommandServer {
                 commandProcessor.getCurrentState()
             );
         } catch (RuntimeException error) {
-            // Catch unexpected command-processing errors so a single
-            // request cannot stop the server.
             System.err.println(
                 "[PROCESSING ERROR] " + error.getMessage()
             );
@@ -203,7 +220,7 @@ public final class CommandServer {
     }
 
     /**
-     * Serialize and send one acknowledgement to the Python client.
+     * Serialize and send one acknowledgement.
      */
     private void sendAcknowledgement(
         final BufferedWriter writer,
@@ -223,8 +240,9 @@ public final class CommandServer {
             );
         }
 
-        // Add a newline so the Python client can use readline().
-        writer.write(acknowledgementJson);
+        writer.write(
+            acknowledgementJson
+        );
         writer.newLine();
         writer.flush();
 
@@ -236,9 +254,6 @@ public final class CommandServer {
         );
     }
 
-    /**
-     * Return the remote unit's current state for tests and diagnostics.
-     */
     public String getCurrentStateName() {
         return commandProcessor
             .getCurrentState()

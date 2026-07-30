@@ -1,8 +1,7 @@
 package com.aj.commandcontrol.model;
 
 /**
- * Represents the status returned by the Java remote unit
- * to the Python control station.
+ * Represents the status returned by the Java remote unit.
  */
 public enum AcknowledgementStatus {
 
@@ -12,12 +11,17 @@ public enum AcknowledgementStatus {
     ACCEPTED,
 
     /**
-     * The command was valid but was not allowed in the current state.
+     * The command was valid but not permitted in the current state.
      */
     REJECTED,
 
     /**
-     * The incoming JSON message or command fields were invalid.
+     * The JSON structure or command values were invalid.
      */
-    INVALID
+    INVALID,
+
+    /**
+     * The message failed cryptographic authentication.
+     */
+    UNAUTHORIZED
 }

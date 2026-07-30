@@ -15,24 +15,22 @@ import java.util.Map;
 import java.util.Set;
 
 /**
- * Parses and validates JSON command messages received from
- * the control station.
+ * Parses and validates authenticated JSON command messages.
  */
 public final class CommandMessageParser {
 
-    // Jackson object used to parse JSON text.
+    // Jackson object used to parse incoming JSON text.
     private final ObjectMapper objectMapper;
 
-    // Fields currently permitted in a command message.
-    // Rejecting unknown fields helps catch misspellings and
-    // unexpected message formats.
+    // Only these top-level fields are accepted.
     private static final Set<String> ALLOWED_FIELDS = Set.of(
         "message_id",
         "command_type",
         "target_id",
         "sequence_number",
         "timestamp",
-        "payload"
+        "payload",
+        "signature"
     );
 
     /**
@@ -43,11 +41,11 @@ public final class CommandMessageParser {
     }
 
     /**
-     * Parse and validate one JSON command message.
+     * Parse and validate one JSON command.
      *
-     * @param jsonMessage raw JSON received from the control station
-     * @return validated immutable command message
-     * @throws CommandValidationException when the message is invalid
+     * @param jsonMessage raw JSON command
+     * @return validated command model
+     * @throws CommandValidationException when validation fails
      */
     public CommandMessage parse(
         final String jsonMessage
@@ -62,8 +60,9 @@ public final class CommandMessageParser {
         final JsonNode rootNode;
 
         try {
-            // Convert the raw JSON string into a Jackson tree.
-            rootNode = objectMapper.readTree(jsonMessage);
+            rootNode = objectMapper.readTree(
+                jsonMessage
+            );
         } catch (JsonProcessingException error) {
             throw new CommandValidationException(
                 "Malformed JSON command message.",
@@ -71,14 +70,15 @@ public final class CommandMessageParser {
             );
         }
 
-        // The top-level JSON value must be an object.
         if (rootNode == null || !rootNode.isObject()) {
             throw new CommandValidationException(
                 "The command message must be a JSON object."
             );
         }
 
-        validateUnknownFields(rootNode);
+        validateUnknownFields(
+            rootNode
+        );
 
         final String messageId = requireText(
             rootNode,
@@ -105,6 +105,10 @@ public final class CommandMessageParser {
             "timestamp"
         );
 
+        final String signature = requireSignature(
+            rootNode
+        );
+
         final CommandType commandType = parseCommandType(
             commandTypeText
         );
@@ -117,7 +121,6 @@ public final class CommandMessageParser {
             rootNode
         );
 
-        // Build the validated immutable production model.
         try {
             return new CommandMessage(
                 messageId,
@@ -125,7 +128,8 @@ public final class CommandMessageParser {
                 targetId,
                 sequenceNumber,
                 timestamp,
-                payload
+                payload,
+                signature
             );
         } catch (IllegalArgumentException
                  | NullPointerException error) {
@@ -138,7 +142,7 @@ public final class CommandMessageParser {
     }
 
     /**
-     * Reject fields that are not part of the command-message contract.
+     * Reject unexpected top-level JSON fields.
      */
     private static void validateUnknownFields(
         final JsonNode rootNode
@@ -148,7 +152,8 @@ public final class CommandMessageParser {
             rootNode.fieldNames();
 
         while (fieldNames.hasNext()) {
-            final String fieldName = fieldNames.next();
+            final String fieldName =
+                fieldNames.next();
 
             if (!ALLOWED_FIELDS.contains(fieldName)) {
                 throw new CommandValidationException(
@@ -166,7 +171,8 @@ public final class CommandMessageParser {
         final String fieldName
     ) throws CommandValidationException {
 
-        final JsonNode fieldNode = rootNode.get(fieldName);
+        final JsonNode fieldNode =
+            rootNode.get(fieldName);
 
         if (fieldNode == null || fieldNode.isNull()) {
             throw new CommandValidationException(
@@ -181,7 +187,8 @@ public final class CommandMessageParser {
             );
         }
 
-        final String value = fieldNode.asText().trim();
+        final String value =
+            fieldNode.asText().trim();
 
         if (value.isEmpty()) {
             throw new CommandValidationException(
@@ -194,6 +201,28 @@ public final class CommandMessageParser {
     }
 
     /**
+     * Read and validate the HMAC signature field.
+     */
+    private static String requireSignature(
+        final JsonNode rootNode
+    ) throws CommandValidationException {
+
+        final String signature = requireText(
+            rootNode,
+            "signature"
+        ).toLowerCase();
+
+        if (!signature.matches("[0-9a-f]{64}")) {
+            throw new CommandValidationException(
+                "Field 'signature' must contain exactly "
+                    + "64 hexadecimal characters."
+            );
+        }
+
+        return signature;
+    }
+
+    /**
      * Read one required positive integer field.
      */
     private static long requirePositiveLong(
@@ -201,7 +230,8 @@ public final class CommandMessageParser {
         final String fieldName
     ) throws CommandValidationException {
 
-        final JsonNode fieldNode = rootNode.get(fieldName);
+        final JsonNode fieldNode =
+            rootNode.get(fieldName);
 
         if (fieldNode == null || fieldNode.isNull()) {
             throw new CommandValidationException(
@@ -223,7 +253,8 @@ public final class CommandMessageParser {
             );
         }
 
-        final long value = fieldNode.longValue();
+        final long value =
+            fieldNode.longValue();
 
         if (value < 1) {
             throw new CommandValidationException(
@@ -236,14 +267,13 @@ public final class CommandMessageParser {
     }
 
     /**
-     * Convert command text into a supported CommandType.
+     * Convert command text into a supported enum.
      */
     private static CommandType parseCommandType(
         final String commandTypeText
     ) throws CommandValidationException {
 
         try {
-            // Command names use exact enum-style uppercase values.
             return CommandType.valueOf(
                 commandTypeText
             );
@@ -257,14 +287,16 @@ public final class CommandMessageParser {
     }
 
     /**
-     * Convert an ISO-8601 UTC timestamp into an Instant.
+     * Parse one ISO-8601 UTC timestamp.
      */
     private static Instant parseTimestamp(
         final String timestampText
     ) throws CommandValidationException {
 
         try {
-            return Instant.parse(timestampText);
+            return Instant.parse(
+                timestampText
+            );
         } catch (DateTimeException error) {
             throw new CommandValidationException(
                 "Field 'timestamp' must contain a valid "
@@ -275,7 +307,7 @@ public final class CommandMessageParser {
     }
 
     /**
-     * Parse the optional payload object.
+     * Parse the optional JSON payload object.
      */
     private Map<String, Object> parsePayload(
         final JsonNode rootNode
@@ -284,7 +316,6 @@ public final class CommandMessageParser {
         final JsonNode payloadNode =
             rootNode.get("payload");
 
-        // Missing payload is treated as an empty object.
         if (payloadNode == null || payloadNode.isNull()) {
             return Collections.emptyMap();
         }
