@@ -15,12 +15,18 @@ repositories {
 
 // Declare production and testing dependencies.
 dependencies {
-    // Jackson converts JSON messages into Java objects and back into JSON.
+    // Jackson handles JSON serialization and parsing.
     implementation 'com.fasterxml.jackson.core:jackson-databind:2.18.2'
 
-    // JUnit Jupiter provides the unit-testing framework.
+    // Use the JUnit 5 BOM so all JUnit components use matching versions.
     testImplementation platform('org.junit:junit-bom:5.11.4')
+
+    // JUnit Jupiter API and test engine.
     testImplementation 'org.junit.jupiter:junit-jupiter'
+
+    // Gradle 9 requires the JUnit Platform launcher
+    // to be present on the test runtime classpath.
+    testRuntimeOnly 'org.junit.platform:junit-platform-launcher'
 }
 
 // Require Java 21 for compilation.
@@ -37,9 +43,10 @@ application {
 
 // Configure all tests to use JUnit 5.
 test {
+    // Run all tests using JUnit 5.
     useJUnitPlatform()
 
-    // Display test results in the terminal.
+    // Show each test result in the terminal.
     testLogging {
         events 'passed', 'skipped', 'failed'
     }
