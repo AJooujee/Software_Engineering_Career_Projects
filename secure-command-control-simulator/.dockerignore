@@ -1,0 +1,31 @@
+# Gradle cache and local build output
+.gradle/
+build/
+
+# Git metadata
+.git/
+.gitignore
+
+# IDE settings
+.vscode/
+.idea/
+*.iml
+
+# Runtime logs
+logs/
+*.log
+
+# Python-generated files
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# Local secrets
+.env
+*.key
+*.secret
+
+# Operating-system files
+.DS_Store
+Thumbs.db

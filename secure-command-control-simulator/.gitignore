@@ -6,6 +6,9 @@ build/
 *.class
 *.jar
 
+# Gradle Wrapper JAR must be committed.
+!gradle/wrapper/gradle-wrapper.jar
+
 # Visual Studio Code
 .vscode/
 
@@ -31,3 +34,8 @@ logs/*.json
 # Operating-system files
 .DS_Store
 Thumbs.db
+
+# Local secrets
+.env
+*.key
+*.secret

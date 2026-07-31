@@ -1,0 +1,25 @@
+services:
+  command-server:
+    # Build the Java command server from the local Dockerfile.
+    build:
+      context: .
+      dockerfile: Dockerfile
+
+    # Assign a readable container name for local development.
+    container_name: secure-command-control-server
+
+    # Publish the Java TCP server to the host computer.
+    ports:
+      - "6060:6060"
+
+    # Load runtime configuration without embedding secrets in the image.
+    environment:
+      COMMAND_CONTROL_SHARED_SECRET: ${COMMAND_CONTROL_SHARED_SECRET}
+      COMMAND_CONTROL_DROP_FIRST_ACK_MESSAGE_ID: ${COMMAND_CONTROL_DROP_FIRST_ACK_MESSAGE_ID:-}
+
+    # Persist structured audit logs on the host.
+    volumes:
+      - ./logs:/app/logs
+
+    # Restart only when the process unexpectedly fails.
+    restart: on-failure
