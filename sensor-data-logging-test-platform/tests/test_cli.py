@@ -72,3 +72,27 @@ def test_cli_saves_generated_readings(
         assert repository.count() == 8
     finally:
         engine.dispose()
+
+
+def test_cli_reports_injected_faults(monkeypatch, capsys) -> None:
+    """A full fault rate should produce four diagnosed faults."""
+
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "sensor-sim",
+            "--count",
+            "1",
+            "--fault-rate",
+            "1.0",
+        ],
+    )
+
+    main()
+    captured = capsys.readouterr()
+    output = json.loads(captured.out)
+
+    assert len(output) == 4
+    assert all(item["status"] == "fault" for item in output)
+    assert "Fault: 4" in captured.err
