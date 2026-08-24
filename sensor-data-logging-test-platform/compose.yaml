@@ -1,0 +1,55 @@
+services:
+  api:
+    # Build and run the FastAPI service.
+    build:
+      context: .
+    image: sensor-data-platform:local
+    command:
+      - uvicorn
+      - sensor_platform.api:app
+      - --host
+      - 0.0.0.0
+      - --port
+      - "8000"
+    ports:
+      - "8001:8000"
+    volumes:
+      - sensor-data:/app/data
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health')"
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    restart: unless-stopped
+
+  dashboard:
+    # Run Streamlit from the same application image.
+    build:
+      context: .
+    image: sensor-data-platform:local
+    command:
+      - python
+      - -m
+      - streamlit
+      - run
+      - src/sensor_platform/dashboard.py
+      - --server.address=0.0.0.0
+      - --server.port=8501
+      - --browser.gatherUsageStats=false
+    ports:
+      - "8501:8501"
+    volumes:
+      - sensor-data:/app/data
+    depends_on:
+      api:
+        condition: service_healthy
+    restart: unless-stopped
+
+volumes:
+  # Persist SQLite data and share it between both services.
+  sensor-data:

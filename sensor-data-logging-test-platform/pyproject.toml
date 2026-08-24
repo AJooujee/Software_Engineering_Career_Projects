@@ -12,6 +12,7 @@ requires-python = ">=3.12"
 sensor-sim = "sensor_platform.cli:main"
 sensor-test = "sensor_platform.hardware_cli:main"
 sensor-dashboard = "sensor_platform.dashboard_cli:main"
+sensor-api = "sensor_platform.api_cli:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
