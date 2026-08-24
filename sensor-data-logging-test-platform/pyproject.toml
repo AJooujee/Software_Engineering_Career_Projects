@@ -1,0 +1,10 @@
+[project]
+name = "sensor-data-logging-test-platform"
+version = "0.1.0"
+description = "A platform for sensor data logging, hardware test automation, and fault analysis."
+requires-python = ">=3.12"
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+testpaths = ["tests"]
+addopts = "-v"
