@@ -10,6 +10,7 @@ requires-python = ">=3.12"
 
 [project.scripts]
 sensor-sim = "sensor_platform.cli:main"
+sensor-test = "sensor_platform.hardware_cli:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
