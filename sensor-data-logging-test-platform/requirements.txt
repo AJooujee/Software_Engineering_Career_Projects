@@ -1,2 +1,5 @@
 pytest==9.1.1
 SQLAlchemy>=2.0,<3.0
+streamlit>=1.40
+plotly>=5.0
+pandas>=2.0
