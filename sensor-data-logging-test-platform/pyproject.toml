@@ -1,8 +1,18 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
 [project]
 name = "sensor-data-logging-test-platform"
 version = "0.1.0"
 description = "A platform for sensor data logging, hardware test automation, and fault analysis."
 requires-python = ">=3.12"
+
+[project.scripts]
+sensor-sim = "sensor_platform.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
 
 [tool.pytest.ini_options]
 pythonpath = ["src"]
