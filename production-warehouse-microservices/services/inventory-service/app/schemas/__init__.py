@@ -1,4 +1,8 @@
-from app.schemas.product import ProductCreate, ProductResponse, ProductUpdate
+from app.schemas.product import (
+    ProductCreate,
+    ProductResponse,
+    ProductUpdate,
+)
 from app.schemas.stock import (
     InventoryBalanceResponse,
     MovementType,
@@ -6,7 +10,10 @@ from app.schemas.stock import (
     StockMovementResponse,
     StockOperationResponse,
     StockReceiptRequest,
+    StockTransferRequest,
+    StockTransferResponse,
 )
+
 
 __all__ = [
     "InventoryBalanceResponse",
@@ -18,4 +25,6 @@ __all__ = [
     "StockMovementResponse",
     "StockOperationResponse",
     "StockReceiptRequest",
+    "StockTransferRequest",
+    "StockTransferResponse",
 ]

@@ -17,6 +17,8 @@ from app.db.database import Base
 
 
 class StockMovement(Base):
+    """Immutable audit record describing one inventory balance change."""
+
     __tablename__ = "stock_movements"
     __table_args__ = (
         CheckConstraint(
@@ -26,7 +28,9 @@ class StockMovement(Base):
                 'ISSUE',
                 'ADJUSTMENT',
                 'RESERVATION',
-                'RELEASE'
+                'RELEASE',
+                'TRANSFER_OUT',
+                'TRANSFER_IN'
             )
             """,
             name="ck_stock_movements_valid_type",
@@ -95,6 +99,11 @@ class StockMovement(Base):
     )
     reason: Mapped[str | None] = mapped_column(
         String(500),
+        nullable=True,
+    )
+    transfer_id: Mapped[UUID | None] = mapped_column(
+        Uuid,
+        index=True,
         nullable=True,
     )
     created_at: Mapped[datetime] = mapped_column(
