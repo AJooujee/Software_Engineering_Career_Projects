@@ -44,6 +44,19 @@ class StockIssueRequest(StockChangeRequest):
 
     pass
 
+class StockReservationRequest(StockChangeRequest):
+    """Request to reserve available inventory for an order."""
+
+    # Every reservation must identify its owning order.
+    reference_id: str = Field(min_length=1, max_length=100)
+
+
+class StockReleaseRequest(StockChangeRequest):
+    """Request to release inventory reserved by a specific order."""
+
+    # Release operations must use the same order reference as reservation.
+    reference_id: str = Field(min_length=1, max_length=100)
+
 
 class StockTransferRequest(BaseModel):
     """Request to move stock between two different warehouses."""

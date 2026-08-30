@@ -1,7 +1,7 @@
 from dataclasses import dataclass
 from uuid import UUID, uuid4
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.orm import Session
 
@@ -9,6 +9,8 @@ from app.models import InventoryBalance, Product, StockMovement
 from app.schemas.stock import (
     StockIssueRequest,
     StockReceiptRequest,
+    StockReleaseRequest,
+    StockReservationRequest,
     StockTransferRequest,
 )
 
@@ -34,6 +36,41 @@ class InsufficientStockError(Exception):
         super().__init__(
             "Insufficient stock: "
             f"{available_quantity} available, "
+            f"{requested_quantity} requested"
+        )
+
+
+class ReservationAlreadyExistsError(Exception):
+    """Raised when an order attempts to reserve the same stock twice."""
+
+    def __init__(
+        self,
+        reference_id: str,
+        reserved_quantity: int,
+    ) -> None:
+        self.reference_id = reference_id
+        self.reserved_quantity = reserved_quantity
+        super().__init__(
+            f"Reservation '{reference_id}' already has "
+            f"{reserved_quantity} reserved"
+        )
+
+
+class InsufficientReservedStockError(Exception):
+    """Raised when an order attempts to release too much stock."""
+
+    def __init__(
+        self,
+        reserved_quantity: int,
+        requested_quantity: int,
+        reference_id: str,
+    ) -> None:
+        self.reserved_quantity = reserved_quantity
+        self.requested_quantity = requested_quantity
+        self.reference_id = reference_id
+        super().__init__(
+            "Insufficient reserved stock: "
+            f"{reserved_quantity} reserved for '{reference_id}', "
             f"{requested_quantity} requested"
         )
 
@@ -67,6 +104,33 @@ def _ensure_product_exists(
 
     if product is None:
         raise ProductNotFoundError(product_id)
+
+def _get_reference_reserved_quantity(
+    database: Session,
+    product_id: UUID,
+    warehouse_id: UUID,
+    reference_id: str,
+) -> int:
+    """Return the remaining reservation owned by one order reference."""
+
+    statement = select(
+        func.coalesce(
+            func.sum(StockMovement.reserved_delta),
+            0,
+        )
+    ).where(
+        StockMovement.product_id == product_id,
+        StockMovement.warehouse_id == warehouse_id,
+        StockMovement.reference_id == reference_id,
+        StockMovement.movement_type.in_(
+            [
+                "RESERVATION",
+                "RELEASE",
+            ]
+        ),
+    )
+
+    return int(database.scalar(statement) or 0)
 
 
 def _insert_empty_balance_if_missing(
@@ -284,6 +348,150 @@ def issue_stock(
             movement=movement,
         )
     except Exception:
+        database.rollback()
+        raise
+
+def reserve_stock(
+    database: Session,
+    request: StockReservationRequest,
+) -> StockOperationResult:
+    """Reserve available stock for one order reference."""
+
+    try:
+        _ensure_product_exists(database, request.product_id)
+
+        balance = _get_balance_for_update(
+            database,
+            request.product_id,
+            request.warehouse_id,
+        )
+
+        reserved_for_reference = _get_reference_reserved_quantity(
+            database=database,
+            product_id=request.product_id,
+            warehouse_id=request.warehouse_id,
+            reference_id=request.reference_id,
+        )
+
+        # Repeated requests must not reserve the same order twice.
+        if reserved_for_reference > 0:
+            raise ReservationAlreadyExistsError(
+                reference_id=request.reference_id,
+                reserved_quantity=reserved_for_reference,
+            )
+
+        available_quantity = 0
+
+        if balance is not None:
+            available_quantity = (
+                balance.quantity_on_hand
+                - balance.quantity_reserved
+            )
+
+        if balance is None or request.quantity > available_quantity:
+            raise InsufficientStockError(
+                available_quantity=available_quantity,
+                requested_quantity=request.quantity,
+            )
+
+        balance.quantity_reserved += request.quantity
+
+        movement = StockMovement(
+            product_id=request.product_id,
+            warehouse_id=request.warehouse_id,
+            movement_type="RESERVATION",
+            on_hand_delta=0,
+            reserved_delta=request.quantity,
+            on_hand_balance_after=balance.quantity_on_hand,
+            reserved_balance_after=balance.quantity_reserved,
+            reference_id=request.reference_id,
+            reason=request.reason,
+            transfer_id=None,
+        )
+
+        database.add(movement)
+        database.commit()
+        database.refresh(balance)
+        database.refresh(movement)
+
+        return StockOperationResult(
+            balance=balance,
+            movement=movement,
+        )
+    except Exception:
+        # A failed reservation must not consume any available quantity.
+        database.rollback()
+        raise
+
+
+def release_stock(
+    database: Session,
+    request: StockReleaseRequest,
+) -> StockOperationResult:
+    """Release stock owned by one order reference."""
+
+    try:
+        _ensure_product_exists(database, request.product_id)
+
+        balance = _get_balance_for_update(
+            database,
+            request.product_id,
+            request.warehouse_id,
+        )
+
+        reserved_for_reference = _get_reference_reserved_quantity(
+            database=database,
+            product_id=request.product_id,
+            warehouse_id=request.warehouse_id,
+            reference_id=request.reference_id,
+        )
+
+        releasable_quantity = 0
+
+        if balance is not None:
+            # This defensive minimum protects the aggregate balance even if
+            # its audit history becomes inconsistent.
+            releasable_quantity = min(
+                reserved_for_reference,
+                balance.quantity_reserved,
+            )
+
+        if (
+            balance is None
+            or request.quantity > releasable_quantity
+        ):
+            raise InsufficientReservedStockError(
+                reserved_quantity=releasable_quantity,
+                requested_quantity=request.quantity,
+                reference_id=request.reference_id,
+            )
+
+        balance.quantity_reserved -= request.quantity
+
+        movement = StockMovement(
+            product_id=request.product_id,
+            warehouse_id=request.warehouse_id,
+            movement_type="RELEASE",
+            on_hand_delta=0,
+            reserved_delta=-request.quantity,
+            on_hand_balance_after=balance.quantity_on_hand,
+            reserved_balance_after=balance.quantity_reserved,
+            reference_id=request.reference_id,
+            reason=request.reason,
+            transfer_id=None,
+        )
+
+        database.add(movement)
+        database.commit()
+        database.refresh(balance)
+        database.refresh(movement)
+
+        return StockOperationResult(
+            balance=balance,
+            movement=movement,
+        )
+    except Exception:
+        # Rollback keeps the order reservation unchanged after any error.
         database.rollback()
         raise
 

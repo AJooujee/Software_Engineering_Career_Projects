@@ -10,6 +10,8 @@ from app.schemas.stock import (
     StockMovementResponse,
     StockOperationResponse,
     StockReceiptRequest,
+    StockReleaseRequest,
+    StockReservationRequest,
     StockTransferRequest,
     StockTransferResponse,
 )
@@ -25,6 +27,8 @@ __all__ = [
     "StockMovementResponse",
     "StockOperationResponse",
     "StockReceiptRequest",
+    "StockReleaseRequest",
+    "StockReservationRequest",
     "StockTransferRequest",
     "StockTransferResponse",
 ]
