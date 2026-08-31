@@ -3,10 +3,21 @@ from pathlib import Path
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+def find_env_file() -> Path | None:
+    """Find the shared local .env file without assuming a fixed path depth."""
 
-PROJECT_ROOT = Path(__file__).resolve().parents[4]
-ENV_FILE = PROJECT_ROOT / ".env"
+    for parent_directory in Path(__file__).resolve().parents:
+        candidate = parent_directory / ".env"
 
+        if candidate.is_file():
+            return candidate
+
+    # Docker receives configuration through environment variables,
+    # so an .env file is optional inside the container.
+    return None
+
+
+ENV_FILE = find_env_file()
 
 class Settings(BaseSettings):
     database_url: str
