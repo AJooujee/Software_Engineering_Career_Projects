@@ -5,6 +5,14 @@ from sqlalchemy.orm import Session
 from app.db.database import get_db
 from app.api.routes.warehouses import router as warehouses_router
 
+from app.core.observability import (
+    RequestLoggingMiddleware,
+    configure_logging,
+)
+
+SERVICE_NAME = "warehouse-service"
+configure_logging(SERVICE_NAME)
+
 
 app = FastAPI(
     title="Warehouse Service API",
@@ -13,6 +21,11 @@ app = FastAPI(
         "between warehouses."
     ),
     version="1.0.0",
+)
+
+app.add_middleware(
+    RequestLoggingMiddleware,
+    service_name=SERVICE_NAME,
 )
 
 app.include_router(warehouses_router)

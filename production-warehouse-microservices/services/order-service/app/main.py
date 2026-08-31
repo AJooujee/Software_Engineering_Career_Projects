@@ -5,6 +5,14 @@ from sqlalchemy.orm import Session
 from app.api.routes import orders_router
 from app.db.database import get_db
 
+from app.core.observability import (
+    RequestLoggingMiddleware,
+    configure_logging,
+)
+
+SERVICE_NAME = "order-service"
+configure_logging(SERVICE_NAME)
+
 
 app = FastAPI(
     title="Order Service API",
@@ -12,6 +20,11 @@ app = FastAPI(
         "Manages customer orders and their inventory reservation lifecycle."
     ),
     version="1.0.0",
+)
+
+app.add_middleware(
+    RequestLoggingMiddleware,
+    service_name=SERVICE_NAME,
 )
 
 app.include_router(orders_router)
