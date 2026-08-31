@@ -1,7 +1,7 @@
 """create orders and order items tables
 
 Revision ID: 0f583f9c3e49
-Revises: 
+Revises:
 Create Date: 2026-08-30 20:32:34.208759
 
 """
