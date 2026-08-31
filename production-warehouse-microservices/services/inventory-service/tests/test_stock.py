@@ -351,3 +351,237 @@ def test_stock_transfer_is_atomic() -> None:
                     )
                 )
                 database.commit()
+
+def test_stock_reservation_and_release_are_order_scoped() -> None:
+    """Verify reservation ownership, validation, and rollback behavior."""
+
+    warehouse_id = "55555555-5555-4555-8555-555555555555"
+    order_reference = f"ORDER-{uuid4().hex[:12].upper()}"
+    other_reference = f"ORDER-{uuid4().hex[:12].upper()}"
+    sku = f"RESERVE-{uuid4().hex[:8].upper()}"
+    product_id: str | None = None
+
+    try:
+        # Create a product owned only by this test.
+        create_product_response = client.post(
+            "/products",
+            json={
+                "sku": sku,
+                "name": "Reservation Test Product",
+                "description": "Temporary product for reservation tests.",
+                "unit_price": 79.99,
+                "reorder_level": 5,
+            },
+        )
+
+        assert create_product_response.status_code == 201
+
+        product_id = create_product_response.json()["id"]
+
+        # Seed the warehouse with 100 available units.
+        receipt_response = client.post(
+            "/stock/receipts",
+            json={
+                "product_id": product_id,
+                "warehouse_id": warehouse_id,
+                "quantity": 100,
+                "reference_id": "RESERVATION-RECEIPT-001",
+                "reason": "Seed stock for reservation test",
+            },
+        )
+
+        assert receipt_response.status_code == 201
+
+        # Reserve 30 units for one order.
+        reservation_response = client.post(
+            "/stock/reservations",
+            json={
+                "product_id": product_id,
+                "warehouse_id": warehouse_id,
+                "quantity": 30,
+                "reference_id": order_reference,
+                "reason": "Reserve inventory for automated order",
+            },
+        )
+
+        assert reservation_response.status_code == 200
+
+        reservation_body = reservation_response.json()
+
+        assert reservation_body["balance"]["quantity_on_hand"] == 100
+        assert reservation_body["balance"]["quantity_reserved"] == 30
+        assert reservation_body["balance"]["available_quantity"] == 70
+        assert (
+            reservation_body["movement"]["movement_type"]
+            == "RESERVATION"
+        )
+        assert reservation_body["movement"]["on_hand_delta"] == 0
+        assert reservation_body["movement"]["reserved_delta"] == 30
+
+        # Retrying the same order reference must not reserve stock twice.
+        duplicate_response = client.post(
+            "/stock/reservations",
+            json={
+                "product_id": product_id,
+                "warehouse_id": warehouse_id,
+                "quantity": 30,
+                "reference_id": order_reference,
+                "reason": "Duplicate reservation retry",
+            },
+        )
+
+        assert duplicate_response.status_code == 409
+        assert (
+            duplicate_response.json()["detail"]["reserved_quantity"]
+            == 30
+        )
+
+        # A different order cannot reserve above the remaining availability.
+        insufficient_response = client.post(
+            "/stock/reservations",
+            json={
+                "product_id": product_id,
+                "warehouse_id": warehouse_id,
+                "quantity": 80,
+                "reference_id": other_reference,
+                "reason": "Insufficient reservation test",
+            },
+        )
+
+        assert insufficient_response.status_code == 409
+        assert (
+            insufficient_response.json()["detail"]["available_quantity"]
+            == 70
+        )
+
+        # Another order reference cannot release this order's reservation.
+        wrong_reference_response = client.post(
+            "/stock/releases",
+            json={
+                "product_id": product_id,
+                "warehouse_id": warehouse_id,
+                "quantity": 5,
+                "reference_id": other_reference,
+                "reason": "Attempt to release another order's stock",
+            },
+        )
+
+        assert wrong_reference_response.status_code == 409
+        assert (
+            wrong_reference_response.json()["detail"][
+                "reserved_quantity"
+            ]
+            == 0
+        )
+
+        # Partially release 10 units from the owning order.
+        partial_release_response = client.post(
+            "/stock/releases",
+            json={
+                "product_id": product_id,
+                "warehouse_id": warehouse_id,
+                "quantity": 10,
+                "reference_id": order_reference,
+                "reason": "Partial order cancellation",
+            },
+        )
+
+        assert partial_release_response.status_code == 200
+
+        partial_release_body = partial_release_response.json()
+
+        assert partial_release_body["balance"]["quantity_on_hand"] == 100
+        assert partial_release_body["balance"]["quantity_reserved"] == 20
+        assert partial_release_body["balance"]["available_quantity"] == 80
+        assert (
+            partial_release_body["movement"]["movement_type"]
+            == "RELEASE"
+        )
+        assert partial_release_body["movement"]["reserved_delta"] == -10
+
+        # Releasing above the order's remaining reservation must roll back.
+        excessive_release_response = client.post(
+            "/stock/releases",
+            json={
+                "product_id": product_id,
+                "warehouse_id": warehouse_id,
+                "quantity": 25,
+                "reference_id": order_reference,
+                "reason": "Excessive release test",
+            },
+        )
+
+        assert excessive_release_response.status_code == 409
+
+        excessive_detail = excessive_release_response.json()["detail"]
+
+        assert excessive_detail["reserved_quantity"] == 20
+        assert excessive_detail["requested_quantity"] == 25
+
+        # Release the final 20 units owned by the order.
+        final_release_response = client.post(
+            "/stock/releases",
+            json={
+                "product_id": product_id,
+                "warehouse_id": warehouse_id,
+                "quantity": 20,
+                "reference_id": order_reference,
+                "reason": "Release remaining order reservation",
+            },
+        )
+
+        assert final_release_response.status_code == 200
+
+        final_balance = final_release_response.json()["balance"]
+
+        assert final_balance["quantity_on_hand"] == 100
+        assert final_balance["quantity_reserved"] == 0
+        assert final_balance["available_quantity"] == 100
+
+        # Only successful operations should appear in movement history.
+        movements_response = client.get(
+            "/stock/movements",
+            params={
+                "product_id": product_id,
+                "warehouse_id": warehouse_id,
+                "offset": 0,
+                "limit": 100,
+            },
+        )
+
+        assert movements_response.status_code == 200
+
+        movements = movements_response.json()
+
+        assert len(movements) == 4
+        assert [
+            movement["movement_type"]
+            for movement in movements
+        ].count("RESERVATION") == 1
+        assert [
+            movement["movement_type"]
+            for movement in movements
+        ].count("RELEASE") == 2
+
+    finally:
+        # Remove every temporary movement and balance before the product.
+        if product_id is not None:
+            product_uuid = UUID(product_id)
+
+            with SessionLocal() as database:
+                database.execute(
+                    delete(StockMovement).where(
+                        StockMovement.product_id == product_uuid,
+                    )
+                )
+                database.execute(
+                    delete(InventoryBalance).where(
+                        InventoryBalance.product_id == product_uuid,
+                    )
+                )
+                database.execute(
+                    delete(Product).where(
+                        Product.id == product_uuid,
+                    )
+                )
+                database.commit()

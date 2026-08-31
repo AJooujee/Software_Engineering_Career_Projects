@@ -14,12 +14,18 @@ from app.schemas import (
     StockReceiptRequest,
     StockTransferRequest,
     StockTransferResponse,
+    StockReleaseRequest,
+    StockReservationRequest,
 )
 from app.services import (
+    InsufficientReservedStockError,
     InsufficientStockError,
     ProductNotFoundError,
+    ReservationAlreadyExistsError,
     issue_stock,
     receive_stock,
+    release_stock,
+    reserve_stock,
     transfer_stock,
 )
 
@@ -87,12 +93,91 @@ def issue_stock_endpoint(
         "movement": result.movement,
     }
 
+@router.post(
+    "/reservations",
+    response_model=StockOperationResponse,
+    status_code=status.HTTP_200_OK,
+)
+def reserve_stock_endpoint(
+    request: StockReservationRequest,
+    database: Session = Depends(get_db),
+) -> dict[str, object]:
+    """Reserve available inventory for one order reference."""
+
+    try:
+        result = reserve_stock(database, request)
+    except ProductNotFoundError as error:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=str(error),
+        ) from error
+    except ReservationAlreadyExistsError as error:
+        # Duplicate requests must not reserve the same order twice.
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={
+                "message": str(error),
+                "reference_id": error.reference_id,
+                "reserved_quantity": error.reserved_quantity,
+            },
+        ) from error
+    except InsufficientStockError as error:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={
+                "message": str(error),
+                "available_quantity": error.available_quantity,
+                "requested_quantity": error.requested_quantity,
+            },
+        ) from error
+
+    return {
+        "balance": result.balance,
+        "movement": result.movement,
+    }
+
+
+@router.post(
+    "/releases",
+    response_model=StockOperationResponse,
+    status_code=status.HTTP_200_OK,
+)
+def release_stock_endpoint(
+    request: StockReleaseRequest,
+    database: Session = Depends(get_db),
+) -> dict[str, object]:
+    """Release inventory owned by one order reference."""
+
+    try:
+        result = release_stock(database, request)
+    except ProductNotFoundError as error:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=str(error),
+        ) from error
+    except InsufficientReservedStockError as error:
+        # A release cannot consume reservations owned by another order.
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={
+                "message": str(error),
+                "reference_id": error.reference_id,
+                "reserved_quantity": error.reserved_quantity,
+                "requested_quantity": error.requested_quantity,
+            },
+        ) from error
+
+    return {
+        "balance": result.balance,
+        "movement": result.movement,
+    }
 
 @router.post(
     "/transfers",
     response_model=StockTransferResponse,
     status_code=status.HTTP_200_OK,
 )
+
 def transfer_stock_endpoint(
     request: StockTransferRequest,
     database: Session = Depends(get_db),
