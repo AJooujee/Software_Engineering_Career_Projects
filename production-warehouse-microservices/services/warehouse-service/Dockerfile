@@ -1,18 +1,23 @@
 FROM python:3.12-slim
 
-# Keep logs visible immediately and prevent Python cache files in containers.
-ENV PYTHONDONTWRITEBYTECODE=1
-ENV PYTHONUNBUFFERED=1
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PIP_NO_CACHE_DIR=1
 
 WORKDIR /app
 
-# Install dependencies separately so Docker can reuse this cached layer.
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 COPY app ./app
 COPY alembic.ini .
 COPY migrations ./migrations
+
+RUN groupadd --system app \
+    && useradd --system --gid app app \
+    && chown -R app:app /app
+
+USER app
 
 EXPOSE 8002
 

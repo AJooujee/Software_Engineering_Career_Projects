@@ -6,11 +6,23 @@ from app.db.database import get_db
 from app.api.routes.products import router as products_router
 from app.api.routes.stock import router as stock_router
 
+from app.core.observability import (
+    RequestLoggingMiddleware,
+    configure_logging,
+)
+
+SERVICE_NAME = "inventory-service"
+configure_logging(SERVICE_NAME)
 
 app = FastAPI(
     title="Inventory Service API",
     description="Manages products, inventory levels, and stock movements.",
     version="1.0.0",
+)
+
+app.add_middleware(
+    RequestLoggingMiddleware,
+    service_name=SERVICE_NAME,
 )
 
 app.include_router(products_router)
