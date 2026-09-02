@@ -1,0 +1,109 @@
+/* Apply predictable sizing to every element. */
+* {
+  box-sizing: border-box;
+}
+
+/* Define the global appearance of the application. */
+:root {
+  font-family:
+    Inter, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  color: #e8eef9;
+  background: #07111f;
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+}
+
+/* Remove the browser's default spacing. */
+body {
+  margin: 0;
+  min-width: 320px;
+  min-height: 100vh;
+}
+
+/* Center the main content within the browser window. */
+.app-shell {
+  display: grid;
+  min-height: 100vh;
+  place-items: center;
+  padding: 32px;
+  background:
+    radial-gradient(circle at top left, #173a63 0%, transparent 38%),
+    linear-gradient(145deg, #07111f 0%, #0b1729 100%);
+}
+
+/* Limit the width of the introductory content. */
+.hero {
+  width: min(720px, 100%);
+}
+
+.eyebrow {
+  margin: 0 0 12px;
+  color: #62b7ff;
+  font-size: 0.8rem;
+  font-weight: 700;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+}
+
+h1 {
+  margin: 0;
+  font-size: clamp(2.5rem, 8vw, 5rem);
+  line-height: 1;
+  letter-spacing: -0.05em;
+}
+
+.description {
+  max-width: 620px;
+  margin: 24px 0 32px;
+  color: #aebdd2;
+  font-size: 1.1rem;
+  line-height: 1.7;
+}
+
+/* Display the live connection state returned by FastAPI. */
+.status-card {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 20px;
+  border: 1px solid #263b57;
+  border-radius: 16px;
+  background: rgb(12 28 48 / 75%);
+  box-shadow: 0 20px 60px rgb(0 0 0 / 25%);
+}
+
+.status-indicator {
+  width: 14px;
+  height: 14px;
+  flex: 0 0 auto;
+  border-radius: 50%;
+}
+
+.status-indicator--checking {
+  background: #fbbf24;
+  box-shadow: 0 0 16px #fbbf24;
+}
+
+.status-indicator--healthy {
+  background: #34d399;
+  box-shadow: 0 0 16px #34d399;
+}
+
+.status-indicator--error {
+  background: #fb7185;
+  box-shadow: 0 0 16px #fb7185;
+}
+
+.status-label {
+  margin: 0 0 4px;
+  color: #8396ae;
+  font-size: 0.8rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.status-message {
+  margin: 0;
+  font-weight: 600;
+}
