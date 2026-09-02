@@ -1,0 +1,27 @@
+# Python virtual environments
+.venv/
+venv/
+
+# Python-generated files
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Environment files containing local configuration or secrets
+.env
+.env.*
+!.env.example
+
+# Frontend dependencies and production builds
+node_modules/
+dist/
+
+# IDE configuration
+.vscode/
+.idea/
+
+# Operating system-generated files
+.DS_Store
+Thumbs.db

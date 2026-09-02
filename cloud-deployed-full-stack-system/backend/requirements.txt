@@ -1,0 +1,11 @@
+# Web framework used to build the backend REST API
+fastapi==0.141.1
+
+# ASGI server used to run the FastAPI application
+uvicorn[standard]==0.52.4
+
+# Testing framework used for backend automated tests
+pytest==9.1.1
+
+# HTTP client used internally by FastAPI and Starlette TestClient
+httpx2==2.12.0
