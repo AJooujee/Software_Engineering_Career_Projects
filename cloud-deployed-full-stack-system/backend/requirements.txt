@@ -4,6 +4,18 @@ fastapi==0.141.1
 # ASGI server used to run the FastAPI application
 uvicorn[standard]==0.52.4
 
+# Environment-based application configuration
+pydantic-settings==2.15.0
+
+# Object-relational mapper used for database access
+SQLAlchemy==2.0.52
+
+# Database migration management
+alembic==1.19.1
+
+# PostgreSQL database driver with Windows-compatible binaries
+psycopg[binary]==3.3.5
+
 # Testing framework used for backend automated tests
 pytest==9.1.1
 
