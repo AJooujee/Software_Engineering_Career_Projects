@@ -1,7 +1,9 @@
-"""Application entry point for the Cloud Operations backend API."""
+﻿"""Application entry point for the Cloud Operations backend API."""
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+
+from app.api.routes import incidents_router
 
 
 # Frontend addresses permitted to call the API during local development.
@@ -45,3 +47,5 @@ def health_check() -> dict[str, str]:
         "status": "healthy",
         "service": "cloud-operations-api",
     }
+# Register incident endpoints under the shared API prefix.
+app.include_router(incidents_router, prefix="/api")
