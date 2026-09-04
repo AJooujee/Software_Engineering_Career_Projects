@@ -4,115 +4,286 @@
 
 The Cloud Operations Platform uses a client-server architecture composed of a React single-page application, a FastAPI REST API, and a PostgreSQL database.
 
-Phase 2 introduces persistent incident management, SQLAlchemy models, Alembic migrations, environment-based database configuration, and a layered backend design.
+Phase 3 introduces authenticated users, Argon2 password hashing, JSON Web Tokens, database-backed role authorization, protected Incident operations, administrator user management, and a secure administrator bootstrap command.
 
 ## Current Architecture
 
 ```mermaid
 flowchart TD
-    User["User Browser"]
-    Frontend["React + Vite"]
+    Client["Browser or API Client"]
+    Frontend["React and Vite"]
     API["FastAPI Application"]
-    Routes["Incident Routes"]
-    Service["Incident Service"]
-    Repository["Incident Repository"]
+    Security["Authentication and RBAC"]
+    Services["Application Services"]
+    Repositories["Repositories"]
     ORM["SQLAlchemy"]
-    Database["PostgreSQL 18"]
-    Migrations["Alembic Migrations"]
+    PostgreSQL["PostgreSQL 18"]
+    Alembic["Alembic Migrations"]
     Tests["Pytest Integration Tests"]
-    TestDatabase["SQLite In-Memory Database"]
+    SQLite["SQLite In-Memory"]
 
-    User --> Frontend
-    Frontend -->|"HTTP requests"| API
-    API --> Routes
-    Routes --> Service
-    Service --> Repository
-    Repository --> ORM
-    ORM --> Database
-    Migrations --> Database
+    Client --> Frontend
+    Client --> API
+    Frontend --> API
+    API --> Security
+    Security --> Services
+    Services --> Repositories
+    Repositories --> ORM
+    ORM --> PostgreSQL
+    Alembic --> PostgreSQL
     Tests --> API
-    Tests --> TestDatabase
+    Tests --> SQLite
 ```
 
 ## Components
 
 | Component | Responsibility |
 |---|---|
-| React frontend | Presents the user interface and displays backend availability |
+| React frontend | Presents the user interface and backend availability |
 | Vite | Runs the frontend development server and creates production builds |
-| FastAPI application | Configures middleware, health endpoints, and API routers |
-| Incident routes | Translate HTTP requests and responses for Incident operations |
-| Incident service | Coordinates business logic and database transactions |
-| Incident repository | Performs SQLAlchemy persistence operations |
-| Pydantic schemas | Validate request bodies and serialize API responses |
-| SQLAlchemy models | Define database tables, columns, indexes, and constraints |
-| PostgreSQL | Persists application data during local development |
-| Alembic | Versions and applies database schema changes |
-| Pytest | Executes automated health and Incident API tests |
-| SQLite | Provides an isolated in-memory database during tests |
+| FastAPI application | Configures middleware, public endpoints, and API routers |
+| Authentication routes | Register users, authenticate credentials, and return the current profile |
+| Authentication dependencies | Validate bearer tokens and load the current database user |
+| User routes | Provide administrator-only user and role management |
+| Incident routes | Enforce role permissions and translate Incident HTTP requests |
+| Security utilities | Hash passwords and create or validate JWT access tokens |
+| Services | Apply business rules and control transaction boundaries |
+| Repositories | Stage SQLAlchemy reads and writes without committing |
+| Pydantic schemas | Validate requests and control response serialization |
+| SQLAlchemy models | Define User and Incident database structures |
+| PostgreSQL | Persist development users and incidents |
+| Alembic | Version and apply database schema changes |
+| Pytest | Execute authentication, authorization, health, and Incident tests |
+| SQLite | Provide a disposable in-memory test database |
 
 ## Backend Layered Design
-
-The backend separates responsibilities into focused packages:
 
 ```text
 backend/app/
 |-- api/
+|   |-- dependencies/
+|   |   `-- auth.py
 |   `-- routes/
-|       `-- incidents.py
+|       |-- auth.py
+|       |-- incidents.py
+|       `-- users.py
+|-- cli/
+|   `-- bootstrap_admin.py
 |-- core/
-|   `-- config.py
+|   |-- config.py
+|   `-- security.py
 |-- db/
 |   |-- base.py
 |   `-- session.py
 |-- models/
-|   `-- incident.py
+|   |-- incident.py
+|   `-- user.py
 |-- repositories/
-|   `-- incidents.py
+|   |-- incidents.py
+|   `-- users.py
 |-- schemas/
-|   `-- incident.py
+|   |-- incident.py
+|   `-- user.py
 |-- services/
+|   |-- auth.py
 |   `-- incidents.py
 `-- main.py
 ```
 
 | Layer | Responsibility |
 |---|---|
-| API route | Receives HTTP input and converts domain errors into HTTP responses |
-| Schema | Validates incoming data and controls response serialization |
-| Service | Applies application logic and owns commit or rollback behavior |
-| Repository | Reads and modifies persistent records through SQLAlchemy |
-| Model | Defines the database representation of an Incident |
+| API route | Receives HTTP input and converts service errors into HTTP responses |
+| Dependency | Resolves database sessions, bearer tokens, current users, and roles |
+| Schema | Validates incoming data and controls public response fields |
+| Service | Applies business rules and owns commit or rollback behavior |
+| Repository | Reads records and stages database changes with `flush()` |
+| Model | Defines persistent User and Incident representations |
 | Database session | Provides one SQLAlchemy session per API request |
-| Core configuration | Loads environment-specific settings from `.env` |
+| Core configuration | Loads database and JWT settings from environment variables |
+| Security utility | Performs Argon2 and JWT cryptographic operations |
+| CLI command | Creates or promotes the first administrator securely |
 
-## Incident Request Flow
+## Authentication Design
 
-A successful create request follows this sequence:
+### Registration
 
-1. The client sends `POST /api/incidents`.
-2. FastAPI validates the JSON body using `IncidentCreate`.
-3. The route passes validated data to the Incident service.
-4. The service calls the Incident repository.
-5. The repository creates the SQLAlchemy model and flushes it.
-6. The service commits the database transaction.
-7. FastAPI serializes the model using `IncidentResponse`.
-8. The client receives `201 Created`.
+A successful registration follows this flow:
 
-Retrieve, update, and delete requests use a UUID path parameter. The service raises `IncidentNotFoundError` when the requested record does not exist, and the API route converts the error into `404 Not Found`.
+1. The client sends `POST /api/auth/register` with email, full name, and password.
+2. Pydantic validates the email and password length.
+3. The service normalizes the email to lowercase.
+4. The service checks whether the normalized email already exists.
+5. The password is hashed with Argon2.
+6. The repository stages the User record.
+7. The service commits the transaction.
+8. FastAPI serializes the record using `UserResponse`.
+9. The password and password hash are excluded from the response.
+
+Public registration always assigns the `viewer` role. Clients cannot select `operator` or `admin` during registration.
+
+### Login
+
+A successful login follows this flow:
+
+1. The client submits email and password to `POST /api/auth/token`.
+2. The endpoint receives OAuth2-compatible form data.
+3. The service looks up the normalized email.
+4. The supplied password is verified against the Argon2 hash.
+5. Disabled accounts are rejected.
+6. The security utility creates a signed access token.
+7. The API returns the bearer token and its lifetime.
+
+Incorrect emails and passwords produce the same public error message. Authentication for an unknown email still performs password-hash verification to reduce observable timing differences.
+
+### Authenticated Request
+
+```mermaid
+sequenceDiagram
+    participant Client
+    participant API
+    participant JWT as JWT Utility
+    participant Users as User Repository
+
+    Client->>API: Request with Bearer token
+    API->>JWT: Validate signature and claims
+    JWT-->>API: User UUID subject
+    API->>Users: Load current User by UUID
+    Users-->>API: Role and active status
+    API->>API: Enforce required role
+    API-->>Client: Response or authorization error
+```
+
+Every authenticated request reloads the User from the database.
+
+This design means:
+
+- Role changes apply to existing tokens immediately.
+- Disabled accounts lose access immediately.
+- Deleted users cannot continue using previously issued tokens.
+- Authorization does not depend on a role claim stored in an older token.
+
+## JWT Design
+
+Access tokens contain:
+
+| Claim | Purpose |
+|---|---|
+| `sub` | Stores the User UUID as the token subject |
+| `type` | Identifies the token as an access token |
+| `iat` | Records when the token was issued |
+| `exp` | Rejects the token after its configured lifetime |
+| `iss` | Identifies the Cloud Operations API as issuer |
+| `aud` | Restricts the intended token consumer |
+
+JWT validation:
+
+- Accepts only the configured `HS256` algorithm
+- Verifies the signature
+- Verifies expiration
+- Verifies issuer
+- Verifies audience
+- Requires an access-token type
+- Requires a non-empty subject
+- Requires the subject to be a valid User UUID
+
+The JWT does not contain the User role.
+
+## Role-Based Access Control
+
+The application defines three roles:
+
+| Role | Responsibility |
+|---|---|
+| `viewer` | Read operational Incident information |
+| `operator` | Read, create, and update Incidents |
+| `admin` | Perform all Incident operations and manage users |
+
+The enforced permission matrix is:
+
+| Operation | Viewer | Operator | Admin |
+|---|---:|---:|---:|
+| List incidents | Yes | Yes | Yes |
+| Retrieve an incident | Yes | Yes | Yes |
+| Create an incident | No | Yes | Yes |
+| Update an incident | No | Yes | Yes |
+| Delete an incident | No | No | Yes |
+| List users | No | No | Yes |
+| Retrieve a user | No | No | Yes |
+| Change user roles | No | No | Yes |
+| Activate or disable users | No | No | Yes |
+
+Administrator routes prevent the current administrator from:
+
+- Removing their own administrator role
+- Disabling their own account
+
+This avoids accidental self-lockout through the API.
+
+## Administrator Bootstrap
+
+A new environment initially has no administrator.
+
+The `app.cli.bootstrap_admin` command provides a controlled bootstrap path:
+
+1. It searches for the normalized email.
+2. If the User exists, it promotes the account to `admin`.
+3. If the User does not exist, it securely prompts for a password.
+4. It validates the new User through the same Pydantic schema.
+5. It creates the User through the same service and repository layers.
+6. It assigns the administrator role.
+7. It reactivates the account when necessary.
+
+The password is not accepted as a command-line argument, preventing it from being stored in shell history.
+
+The command is idempotent and handles `Ctrl + C` without displaying a traceback.
 
 ## Transaction Management
 
-Repository functions stage database operations with `flush()` but do not finalize transactions.
+Repositories stage database changes with `flush()` and do not finalize transactions.
 
-The service layer controls transaction boundaries:
+Services control transaction boundaries:
 
-- Successful create, update, and delete operations call `commit()`.
-- Failed persistence operations call `rollback()`.
+- Successful User and Incident writes call `commit()`.
+- Failed writes call `rollback()`.
 - Read operations do not create explicit commits.
-- FastAPI closes the request session through the `get_db` dependency.
+- Duplicate registration handles database uniqueness races and rolls back the session.
+- FastAPI closes each request session through the `get_db` dependency.
 
-This separation keeps transaction behavior outside HTTP routing and low-level repository code.
+This keeps transaction ownership out of HTTP routes and low-level repositories.
+
+## User Data Model
+
+The `users` table stores authenticated accounts.
+
+| Column | Database Type | Rules |
+|---|---|---|
+| `id` | UUID | Primary key generated by the application |
+| `email` | VARCHAR(320) | Required, normalized, and uniquely indexed |
+| `full_name` | VARCHAR(120) | Required |
+| `password_hash` | VARCHAR(255) | Required Argon2 hash |
+| `role` | VARCHAR(8) | Required and defaults to `viewer` |
+| `is_active` | BOOLEAN | Required and defaults to true |
+| `created_at` | TIMESTAMP WITH TIME ZONE | Generated automatically |
+| `updated_at` | TIMESTAMP WITH TIME ZONE | Updated automatically |
+
+Supported role values:
+
+```text
+viewer
+operator
+admin
+```
+
+PostgreSQL enforces the values with the `user_role` CHECK constraint.
+
+User indexes:
+
+| Index | Purpose |
+|---|---|
+| `pk_users` | Provides unique UUID lookup |
+| `ix_users_email` | Enforces unique email addresses and supports login lookup |
+| `ix_users_role` | Supports role-based administration queries |
+| `ix_users_is_active` | Supports account-status queries |
 
 ## Incident Data Model
 
@@ -124,10 +295,10 @@ The `incidents` table stores operational events.
 | `title` | VARCHAR(200) | Required and indexed |
 | `description` | TEXT | Required |
 | `service_name` | VARCHAR(120) | Required and indexed |
-| `severity` | VARCHAR(8) | Required, defaults to `medium` |
-| `status` | VARCHAR(13) | Required, defaults to `open`, indexed |
-| `created_at` | TIMESTAMP WITH TIME ZONE | Required and generated automatically |
-| `updated_at` | TIMESTAMP WITH TIME ZONE | Required and updated automatically |
+| `severity` | VARCHAR(8) | Required and defaults to `medium` |
+| `status` | VARCHAR(13) | Required, defaults to `open`, and is indexed |
+| `created_at` | TIMESTAMP WITH TIME ZONE | Generated automatically |
+| `updated_at` | TIMESTAMP WITH TIME ZONE | Updated automatically |
 
 Supported severity values:
 
@@ -147,45 +318,120 @@ resolved
 closed
 ```
 
-PostgreSQL enforces these values through the named CHECK constraints:
+PostgreSQL enforces these values through:
 
 ```text
 incident_severity
 incident_status
 ```
 
-## Database Indexes
-
-The Incident table includes the following indexes:
+Incident indexes:
 
 | Index | Purpose |
 |---|---|
 | `pk_incidents` | Provides unique UUID lookup |
 | `ix_incidents_title` | Supports future title searches |
-| `ix_incidents_service_name` | Supports filtering by affected service |
-| `ix_incidents_status` | Supports filtering by lifecycle status |
+| `ix_incidents_service_name` | Supports affected-service filtering |
+| `ix_incidents_status` | Supports lifecycle-status filtering |
 
 ## Migration Strategy
 
-Alembic reads the database URL from application settings and uses `Base.metadata` to discover SQLAlchemy models.
+Alembic reads the database URL from application settings and discovers models through `Base.metadata`.
 
-The first migration creates:
+Current migration history:
 
-- The `incidents` table
-- UUID primary key
-- Severity and status CHECK constraints
-- Service name, status, and title indexes
-- Creation and update timestamps
-
-The PostgreSQL database stores its current revision in the `alembic_version` table.
+| Revision | Change |
+|---|---|
+| `2ef9cb82e708` | Creates the Incident table, constraints, and indexes |
+| `6b0140f7a01f` | Creates the User table, role constraint, and indexes |
 
 Schema changes follow this workflow:
 
-1. Update the SQLAlchemy model.
+1. Update a SQLAlchemy model.
 2. Generate an Alembic revision with `--autogenerate`.
 3. Review the generated migration.
 4. Apply the migration with `alembic upgrade head`.
 5. Verify schema consistency with `alembic check`.
+
+## Configuration and Security
+
+Application configuration is documented in `.env.example`.
+
+The private `.env` file is excluded through `.gitignore`. It contains:
+
+- Local PostgreSQL credentials
+- SQLAlchemy database URL
+- JWT signing secret
+- Token algorithm and lifetime
+- Token issuer and audience
+
+The JWT secret is represented by Pydantic `SecretStr` to reduce accidental logging.
+
+Additional controls include:
+
+- Argon2 password hashing
+- Minimum password length validation
+- Normalized email uniqueness
+- Generic incorrect-credentials responses
+- Fixed JWT algorithm allowlist
+- Expiration, issuer, and audience validation
+- Database-backed roles and account status
+- Public-registration role restriction
+- Administrator self-lockout prevention
+- Isolated test credentials
+
+CORS currently permits only:
+
+```text
+http://127.0.0.1:5173
+http://localhost:5173
+```
+
+Production secrets, origins, and database URLs will be supplied through the deployment environment.
+
+## Testing Strategy
+
+The backend suite contains 18 automated integration tests covering:
+
+- Health endpoint behavior
+- Local frontend CORS access
+- User registration
+- Email normalization and duplicate detection
+- Argon2 password storage and verification
+- OAuth2 login
+- JWT authentication
+- Missing and malformed tokens
+- Disabled accounts
+- Viewer Incident permissions
+- Operator Incident permissions
+- Administrator Incident permissions
+- Administrator user management
+- Immediate role and status enforcement
+- Privilege-escalation prevention
+- Administrator self-lockout prevention
+- Incident validation and pagination
+- Missing User and Incident responses
+
+Tests replace the PostgreSQL dependency with SQLite in-memory storage.
+
+`StaticPool` keeps the database available across FastAPI test threads, while fixtures create and remove the schema around each test.
+
+This provides:
+
+- Repeatable test state
+- Fast execution
+- No Docker requirement during automated tests
+- No test records written to PostgreSQL
+- Separate JWT credentials for tests
+- Full HTTP-level authentication and authorization coverage
+
+PostgreSQL-specific behavior is additionally verified with:
+
+- Alembic migration execution
+- `alembic check`
+- Live registration and login
+- Live role changes
+- Live administrator access
 
 ## Frontend Design
 
@@ -195,21 +441,9 @@ The frontend currently focuses on backend health visibility.
 |---|---|
 | `src/main.jsx` | Creates the React root and renders the application |
 | `src/App.jsx` | Requests backend health and displays connection status |
-| `src/index.css` | Defines global layout and visual styling |
+| `src/index.css` | Defines global layout and styling |
 
-The frontend reads the backend URL from:
-
-```text
-VITE_API_BASE_URL
-```
-
-When the variable is unavailable, it uses:
-
-```text
-http://127.0.0.1:8000
-```
-
-Incident management screens will be added in later frontend phases.
+Authentication screens, protected routing, and Incident management interfaces will be introduced in the frontend phases.
 
 ## Local Ports
 
@@ -219,62 +453,22 @@ Incident management screens will be added in later frontend phases.
 | FastAPI backend | 8000 | Not containerized |
 | PostgreSQL | 5434 | 5432 |
 
-Port 5434 avoids conflicts with a default local PostgreSQL installation and other portfolio databases.
-
-## Configuration and Security
-
-Application configuration is defined in `.env.example`.
-
-The private `.env` file is excluded through `.gitignore` and must not be committed. It contains local database credentials and environment-specific connection information.
-
-SQLAlchemy masks passwords when connection URLs are rendered for diagnostics.
-
-CORS currently permits only the local React development origins:
-
-```text
-http://127.0.0.1:5173
-http://localhost:5173
-```
-
-Production credentials, origins, and database URLs will be supplied through the cloud deployment environment.
-
-## Testing Strategy
-
-The automated backend suite currently contains five tests:
-
-- Health endpoint response
-- Local frontend CORS access
-- Complete Incident CRUD lifecycle
-- Missing Incident response
-- Invalid request and pagination validation
-
-Tests replace the production database dependency with an isolated SQLite in-memory database.
-
-`StaticPool` keeps the in-memory database available across FastAPI test threads, while an automatic fixture creates and removes the schema around every test.
-
-This design provides:
-
-- Fast test execution
-- Repeatable test state
-- No dependency on Docker during unit and API integration tests
-- No test data written to the PostgreSQL development database
-
-PostgreSQL behavior is additionally verified through Alembic schema checks and a manual live API smoke test.
+Port 5434 avoids conflicts with default PostgreSQL installations and other portfolio databases.
 
 ## Implemented Phases
 
 | Phase | Architecture Addition | Status |
 |---|---|---|
 | 1 | React frontend, FastAPI backend, health integration, and CORS | Complete |
-| 2 | PostgreSQL, SQLAlchemy, Alembic, layered Incident CRUD, and integration tests | Complete |
+| 2 | PostgreSQL, SQLAlchemy, Alembic, layered Incident CRUD, and tests | Complete |
+| 3 | Argon2, JWT authentication, database-backed RBAC, and protected APIs | Complete |
 
 ## Planned Architecture Evolution
 
 | Phase | Architecture Addition |
 |---|---|
-| 3 | Authentication, authorization, password security, and protected routes |
-| 4 | React routing, reusable components, and application state |
-| 5 | Incident management interface and advanced workflow rules |
+| 4 | React routing, reusable components, authentication state, and protected pages |
+| 5 | Incident management interface and workflow rules |
 | 6 | Dashboard queries, filtering, metrics, and audit history |
 | 7 | Backend and frontend containers with Docker Compose networking |
 | 8 | Automated validation and deployment workflows through GitHub Actions |

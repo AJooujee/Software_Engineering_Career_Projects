@@ -4,9 +4,13 @@ from typing import Annotated
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
-from sqlalchemy.orm import Session
 
-from app.db.session import get_db
+from app.api.dependencies import (
+    CurrentUser,
+    DatabaseSession,
+    require_roles,
+)
+from app.models.user import User, UserRole
 from app.schemas.incident import (
     IncidentCreate,
     IncidentResponse,
@@ -15,14 +19,25 @@ from app.schemas.incident import (
 import app.services.incidents as incident_service
 
 
-# Group every incident endpoint under one router and Swagger tag.
 router = APIRouter(
     prefix="/incidents",
     tags=["incidents"],
 )
 
-# Reuse the database dependency annotation across route handlers.
-DatabaseSession = Annotated[Session, Depends(get_db)]
+IncidentOperator = Annotated[
+    User,
+    Depends(
+        require_roles(
+            UserRole.OPERATOR,
+            UserRole.ADMIN,
+        )
+    ),
+]
+
+IncidentAdministrator = Annotated[
+    User,
+    Depends(require_roles(UserRole.ADMIN)),
+]
 
 
 def incident_not_found_response(
@@ -45,8 +60,11 @@ def incident_not_found_response(
 def create_incident(
     incident_data: IncidentCreate,
     database_session: DatabaseSession,
+    authorized_user: IncidentOperator,
 ) -> IncidentResponse:
-    """Create and return a new operational incident."""
+    """Create an incident when the user is an operator or administrator."""
+
+    del authorized_user
 
     return incident_service.create_incident(
         database_session,
@@ -61,10 +79,13 @@ def create_incident(
 )
 def list_incidents(
     database_session: DatabaseSession,
+    current_user: CurrentUser,
     offset: Annotated[int, Query(ge=0)] = 0,
     limit: Annotated[int, Query(ge=1, le=100)] = 20,
 ) -> list[IncidentResponse]:
-    """Return a paginated collection of incidents."""
+    """Return incidents to any authenticated active user."""
+
+    del current_user
 
     return incident_service.list_incidents(
         database_session,
@@ -81,8 +102,11 @@ def list_incidents(
 def get_incident(
     incident_id: UUID,
     database_session: DatabaseSession,
+    current_user: CurrentUser,
 ) -> IncidentResponse:
-    """Return one incident by its identifier."""
+    """Return one incident to any authenticated active user."""
+
+    del current_user
 
     try:
         return incident_service.get_incident(
@@ -102,8 +126,11 @@ def update_incident(
     incident_id: UUID,
     incident_data: IncidentUpdate,
     database_session: DatabaseSession,
+    authorized_user: IncidentOperator,
 ) -> IncidentResponse:
-    """Update selected fields on an existing incident."""
+    """Update an incident as an operator or administrator."""
+
+    del authorized_user
 
     try:
         return incident_service.update_incident(
@@ -123,8 +150,11 @@ def update_incident(
 def delete_incident(
     incident_id: UUID,
     database_session: DatabaseSession,
+    administrator: IncidentAdministrator,
 ) -> Response:
-    """Delete an existing incident without returning a response body."""
+    """Delete an incident when the current user is an administrator."""
+
+    del administrator
 
     try:
         incident_service.delete_incident(

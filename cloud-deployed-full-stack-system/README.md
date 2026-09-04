@@ -1,14 +1,14 @@
 ﻿# Cloud Operations Platform
 
-A cloud-ready full-stack application for monitoring services, managing operational incidents, and displaying system health through a single user interface.
+A cloud-ready full-stack application for monitoring services, managing operational incidents, and controlling access through authenticated user roles.
 
-This portfolio project demonstrates full-stack software engineering with React, FastAPI, PostgreSQL, SQLAlchemy, Alembic migrations, layered backend architecture, automated testing, and environment-based configuration.
+This portfolio project demonstrates full-stack software engineering with React, FastAPI, PostgreSQL, SQLAlchemy, Alembic, Argon2 password hashing, JSON Web Tokens, role-based access control, automated testing, and environment-based configuration.
 
 ## Current Status
 
-**Phase 2 - PostgreSQL Database and Backend CRUD API: Complete**
+**Phase 3 - Authentication and Role-Based Access Control: Complete**
 
-The application now supports persistent incident management through a validated REST API backed by PostgreSQL.
+The backend now supports secure user registration, OAuth2 password login, JWT access tokens, administrator user management, and role-based authorization for Incident operations.
 
 ## Current Features
 
@@ -18,14 +18,22 @@ The application now supports persistent incident management through a validated 
 - PostgreSQL 18 development database
 - SQLAlchemy 2 object-relational mapping
 - Alembic database migrations
-- Incident create, list, retrieve, update, and delete operations
-- UUID incident identifiers
-- Incident status and severity validation
-- Layered route, service, repository, and database architecture
+- Persistent User and Incident models
+- Public user registration with a default viewer role
+- Argon2 password hashing
+- OAuth2 password-form authentication
+- Signed JWT access tokens with expiration, issuer, and audience validation
+- Current-user lookup from PostgreSQL on every authenticated request
+- Viewer, operator, and administrator authorization roles
+- Protected Incident create, list, retrieve, update, and delete operations
+- Administrator user listing, role management, and account status management
+- Protection against administrator self-demotion and self-deactivation
+- Secure administrator bootstrap command
+- Layered route, dependency, service, repository, and database architecture
 - Environment-based application configuration
 - Local CORS configuration
 - Interactive Swagger API documentation
-- Isolated automated API integration tests
+- Isolated SQLite integration tests
 - Reproducible Python and Node dependencies
 - Production frontend build command
 
@@ -44,10 +52,14 @@ The application now supports persistent incident management through a validated 
 - Python 3.12
 - FastAPI
 - Uvicorn
-- Pydantic Settings
+- Pydantic and Pydantic Settings
 - SQLAlchemy 2
 - Alembic
 - Psycopg 3
+- pwdlib with Argon2
+- PyJWT
+- Email Validator
+- Python Multipart
 - Pytest
 - HTTPX2
 
@@ -73,30 +85,44 @@ cloud-deployed-full-stack-system/
 |-- backend/
 |   |-- app/
 |   |   |-- api/
+|   |   |   |-- dependencies/
+|   |   |   |   `-- auth.py
 |   |   |   `-- routes/
-|   |   |       `-- incidents.py
+|   |   |       |-- auth.py
+|   |   |       |-- incidents.py
+|   |   |       `-- users.py
+|   |   |-- cli/
+|   |   |   `-- bootstrap_admin.py
 |   |   |-- core/
-|   |   |   `-- config.py
+|   |   |   |-- config.py
+|   |   |   `-- security.py
 |   |   |-- db/
 |   |   |   |-- base.py
 |   |   |   `-- session.py
 |   |   |-- models/
-|   |   |   `-- incident.py
+|   |   |   |-- incident.py
+|   |   |   `-- user.py
 |   |   |-- repositories/
-|   |   |   `-- incidents.py
+|   |   |   |-- incidents.py
+|   |   |   `-- users.py
 |   |   |-- schemas/
-|   |   |   `-- incident.py
+|   |   |   |-- incident.py
+|   |   |   `-- user.py
 |   |   |-- services/
+|   |   |   |-- auth.py
 |   |   |   `-- incidents.py
 |   |   `-- main.py
 |   |-- migrations/
 |   |   |-- versions/
-|   |   |   `-- 2ef9cb82e708_create_incidents_table.py
+|   |   |   |-- 2ef9cb82e708_create_incidents_table.py
+|   |   |   `-- 6b0140f7a01f_create_users_table.py
 |   |   `-- env.py
 |   |-- tests/
 |   |   |-- conftest.py
+|   |   |-- test_auth.py
 |   |   |-- test_health.py
-|   |   `-- test_incidents.py
+|   |   |-- test_incidents.py
+|   |   `-- test_users.py
 |   |-- alembic.ini
 |   `-- requirements.txt
 |-- docs/
@@ -117,13 +143,15 @@ cloud-deployed-full-stack-system/
 
 ## Environment Configuration
 
-Create the private local environment file from the provided template:
+Create a private local environment file from the provided template:
 
 ```powershell
 Copy-Item .env.example .env
 ```
 
-The development configuration includes:
+The real `.env` file is excluded from Git and must never be committed.
+
+The application uses these variables:
 
 | Variable | Purpose |
 |---|---|
@@ -136,20 +164,51 @@ The development configuration includes:
 | `POSTGRES_PASSWORD` | Defines the local database password |
 | `POSTGRES_PORT` | Exposes PostgreSQL on local port 5434 |
 | `DATABASE_URL` | Provides the SQLAlchemy database connection URL |
+| `JWT_SECRET_KEY` | Signs and validates access tokens |
+| `JWT_ALGORITHM` | Selects the permitted JWT signing algorithm |
+| `ACCESS_TOKEN_EXPIRE_MINUTES` | Controls access-token lifetime |
+| `JWT_ISSUER` | Identifies the service issuing tokens |
+| `JWT_AUDIENCE` | Identifies the intended token consumer |
 
-The real `.env` file is excluded from Git.
+Generate a private random JWT secret after creating `.env`:
+
+```powershell
+$secretBytes = New-Object byte[] 32
+$randomGenerator = [System.Security.Cryptography.RandomNumberGenerator]::Create()
+$randomGenerator.GetBytes($secretBytes)
+$randomGenerator.Dispose()
+$jwtSecret = [Convert]::ToBase64String($secretBytes)
+
+$privateEnvironment = Get-Content .\.env -Raw
+$privateEnvironment = $privateEnvironment.Replace(
+    "replace-with-a-secure-random-secret-at-least-32-characters",
+    $jwtSecret
+)
+
+Set-Content -Path .\.env -Value $privateEnvironment -Encoding utf8
+Remove-Variable jwtSecret, secretBytes
+```
+
+Do not print or commit the generated secret.
 
 ## Local Development
 
 ### 1. Start PostgreSQL
 
-Create the local PostgreSQL container the first time:
+Create the PostgreSQL container the first time:
 
 ```powershell
-docker run --name cloud-operations-postgres -e POSTGRES_DB=cloud_operations -e POSTGRES_USER=cloud_ops -e POSTGRES_PASSWORD=cloud_ops_password -p 5434:5432 -v cloud-operations-postgres-data:/var/lib/postgresql -d postgres:18-alpine
+docker run `
+    --name cloud-operations-postgres `
+    -e POSTGRES_DB=cloud_operations `
+    -e POSTGRES_USER=cloud_ops `
+    -e POSTGRES_PASSWORD=cloud_ops_password `
+    -p 5434:5432 `
+    -v cloud-operations-postgres-data:/var/lib/postgresql `
+    -d postgres:18-alpine
 ```
 
-For later development sessions, start the existing container:
+For later development sessions:
 
 ```powershell
 docker start cloud-operations-postgres
@@ -158,10 +217,13 @@ docker start cloud-operations-postgres
 Verify database readiness:
 
 ```powershell
-docker exec cloud-operations-postgres pg_isready -U cloud_ops -d cloud_operations
+docker exec cloud-operations-postgres `
+    pg_isready `
+    -U cloud_ops `
+    -d cloud_operations
 ```
 
-### 2. Start the Backend
+### 2. Install and Migrate the Backend
 
 From the project directory:
 
@@ -170,6 +232,38 @@ cd backend
 py -m venv .venv
 .\.venv\Scripts\python.exe -m pip install -r requirements.txt
 .\.venv\Scripts\python.exe -m alembic upgrade head
+```
+
+Verify the current migration:
+
+```powershell
+.\.venv\Scripts\python.exe -m alembic current
+```
+
+### 3. Bootstrap an Administrator
+
+Create the first administrator without putting the password in shell history:
+
+```powershell
+.\.venv\Scripts\python.exe -m app.cli.bootstrap_admin `
+    --email "admin@example.com" `
+    --full-name "Cloud Operations Administrator"
+```
+
+The command securely prompts for the password and confirmation.
+
+It can also promote an existing registered user:
+
+```powershell
+.\.venv\Scripts\python.exe -m app.cli.bootstrap_admin `
+    --email "existing.user@example.com"
+```
+
+The command is idempotent and also reactivates a disabled administrator account.
+
+### 4. Start the Backend
+
+```powershell
 .\.venv\Scripts\python.exe -m uvicorn app.main:app --reload
 ```
 
@@ -179,13 +273,13 @@ The backend is available at:
 http://127.0.0.1:8000
 ```
 
-Swagger API documentation:
+Swagger documentation is available at:
 
 ```text
 http://127.0.0.1:8000/docs
 ```
 
-### 3. Start the Frontend
+### 5. Start the Frontend
 
 Open another terminal from the project directory:
 
@@ -201,41 +295,113 @@ The frontend is available at:
 http://127.0.0.1:5173
 ```
 
+## Authentication Workflow
+
+### Register
+
+New accounts are assigned the `viewer` role:
+
+```http
+POST /api/auth/register
+Content-Type: application/json
+```
+
+```json
+{
+  "email": "user@example.com",
+  "full_name": "Example User",
+  "password": "SecurePassword123!"
+}
+```
+
+Passwords must contain between 12 and 128 characters.
+
+### Login
+
+The token endpoint accepts OAuth2 form data. The `username` field contains the user's email address:
+
+```http
+POST /api/auth/token
+Content-Type: application/x-www-form-urlencoded
+```
+
+A successful login returns:
+
+```json
+{
+  "access_token": "signed-jwt-value",
+  "token_type": "bearer",
+  "expires_in": 1800
+}
+```
+
+### Authenticated Requests
+
+Send the access token using the Authorization header:
+
+```text
+Authorization: Bearer signed-jwt-value
+```
+
+The current profile is available through:
+
+```http
+GET /api/auth/me
+```
+
+JWTs contain the user's identifier but do not contain an authorization role. The backend loads the current user from PostgreSQL for every authenticated request. Role changes and account deactivation therefore apply immediately to existing tokens.
+
+## Authorization Roles
+
+| Operation | Viewer | Operator | Admin |
+|---|---:|---:|---:|
+| Read incidents | Yes | Yes | Yes |
+| Create incidents | No | Yes | Yes |
+| Update incidents | No | Yes | Yes |
+| Delete incidents | No | No | Yes |
+| List users | No | No | Yes |
+| Change user roles | No | No | Yes |
+| Activate or disable users | No | No | Yes |
+
+Administrators cannot remove their own admin role or disable their own account through the API.
+
 ## Database Migrations
 
 Run migration commands from the `backend` directory.
 
-Apply every pending migration:
+Apply pending migrations:
 
 ```powershell
 .\.venv\Scripts\python.exe -m alembic upgrade head
 ```
 
-Display the current database revision:
+Display the current revision:
 
 ```powershell
 .\.venv\Scripts\python.exe -m alembic current
 ```
 
-Check whether model metadata differs from the database:
+Check model and database consistency:
 
 ```powershell
 .\.venv\Scripts\python.exe -m alembic check
 ```
 
-Create a migration after changing a database model:
+Create a migration after changing a model:
 
 ```powershell
-.\.venv\Scripts\python.exe -m alembic revision --autogenerate -m "describe schema change"
+.\.venv\Scripts\python.exe -m alembic revision `
+    --autogenerate `
+    -m "describe schema change"
 ```
 
 Autogenerated migrations must be reviewed before they are applied.
 
 ## Automated Testing
 
-Backend API integration tests use an isolated SQLite in-memory database. They do not modify the PostgreSQL development database.
+Backend integration tests use an isolated SQLite in-memory database. They do not modify PostgreSQL development data and do not require Docker.
 
-Run the test suite from the `backend` directory:
+Run the suite from the `backend` directory:
 
 ```powershell
 .\.venv\Scripts\python.exe -m pytest -v
@@ -244,39 +410,42 @@ Run the test suite from the `backend` directory:
 Current expected result:
 
 ```text
-5 passed
+18 passed
 ```
 
 The suite verifies:
 
-- Backend health response
-- Local frontend CORS access
-- Complete Incident CRUD lifecycle
-- Missing Incident responses
-- Request validation and pagination limits
-
-## Production Frontend Build
-
-Run from the `frontend` directory:
-
-```powershell
-npm run build
-```
-
-Vite generates optimized production files inside `frontend/dist`.
+- Backend health and CORS behavior
+- User registration and normalized email uniqueness
+- Argon2 password storage and verification
+- OAuth2 login and JWT authentication
+- Missing, invalid, and disabled-account token handling
+- Viewer, operator, and administrator Incident permissions
+- Administrator user-management permissions
+- Immediate application of role and status changes
+- Privilege-escalation prevention
+- Administrator self-lockout prevention
+- Incident CRUD, validation, pagination, and missing-record responses
 
 ## API Endpoints
 
-| Method | Endpoint | Description |
-|---|---|---|
-| GET | `/` | Confirms that the backend API is running |
-| GET | `/health` | Returns the backend service health status |
-| POST | `/api/incidents` | Creates an operational incident |
-| GET | `/api/incidents` | Lists incidents with pagination |
-| GET | `/api/incidents/{incident_id}` | Retrieves one incident |
-| PATCH | `/api/incidents/{incident_id}` | Updates selected incident fields |
-| DELETE | `/api/incidents/{incident_id}` | Deletes an incident |
-| GET | `/docs` | Opens interactive Swagger documentation |
+| Method | Endpoint | Access | Description |
+|---|---|---|---|
+| GET | `/` | Public | Confirms that the backend is running |
+| GET | `/health` | Public | Returns backend health status |
+| POST | `/api/auth/register` | Public | Registers a viewer account |
+| POST | `/api/auth/token` | Public | Authenticates credentials and returns a JWT |
+| GET | `/api/auth/me` | Authenticated | Returns the current user |
+| GET | `/api/users` | Admin | Lists registered users |
+| GET | `/api/users/{user_id}` | Admin | Retrieves one user |
+| PATCH | `/api/users/{user_id}/role` | Admin | Changes a user's role |
+| PATCH | `/api/users/{user_id}/status` | Admin | Activates or disables a user |
+| POST | `/api/incidents` | Operator, Admin | Creates an incident |
+| GET | `/api/incidents` | Authenticated | Lists incidents with pagination |
+| GET | `/api/incidents/{incident_id}` | Authenticated | Retrieves one incident |
+| PATCH | `/api/incidents/{incident_id}` | Operator, Admin | Updates an incident |
+| DELETE | `/api/incidents/{incident_id}` | Admin | Deletes an incident |
+| GET | `/docs` | Public | Opens interactive API documentation |
 
 ## Incident Lifecycle Values
 
@@ -298,13 +467,29 @@ resolved
 closed
 ```
 
+## Security Design
+
+- Passwords are hashed with Argon2 and never stored or returned as plain text.
+- JWT validation restricts the accepted algorithm and verifies expiration, issuer, and audience.
+- The JWT signing secret is stored through private environment configuration.
+- Pydantic `SecretStr` reduces accidental secret exposure.
+- Login failures use a generic incorrect-credentials response.
+- Unknown-email authentication still performs a password-hash verification to reduce timing differences.
+- Disabled users cannot log in or continue using previously issued tokens.
+- Authorization roles are loaded from the database rather than trusted from token claims.
+- Public registration cannot choose an elevated role.
+- Administrator endpoints prevent self-demotion and self-deactivation.
+- Test credentials and databases are isolated from development data.
+
+Rate limiting, refresh tokens, password recovery, email verification, and centralized token revocation remain future production enhancements.
+
 ## Development Roadmap
 
 | Phase | Scope | Status |
 |---|---|---|
 | 1 | Project foundation and health integration | Complete |
 | 2 | PostgreSQL database and backend CRUD API | Complete |
-| 3 | Authentication and role-based access control | Planned |
+| 3 | Authentication and role-based access control | Complete |
 | 4 | Frontend routing and application layout | Planned |
 | 5 | Incident management workflow | Planned |
 | 6 | Dashboard, filtering, and audit history | Planned |

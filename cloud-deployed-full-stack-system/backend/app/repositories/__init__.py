@@ -16,3 +16,12 @@ __all__ = [
     "list_incidents",
     "update_incident",
 ]
+
+from app.repositories.users import (
+    create_user,
+    get_user_by_email,
+    get_user_by_id,
+    list_users,
+    update_user_role,
+    update_user_status,
+)
