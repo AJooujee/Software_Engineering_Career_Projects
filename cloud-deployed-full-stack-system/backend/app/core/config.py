@@ -1,8 +1,10 @@
-"""Environment-based configuration for the Cloud Operations API."""
+﻿"""Environment-based configuration for the Cloud Operations API."""
 
 from functools import lru_cache
 from pathlib import Path
+from typing import Literal
 
+from pydantic import Field, SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -15,6 +17,17 @@ class Settings(BaseSettings):
 
     app_env: str = "development"
     database_url: str
+
+    # Authentication and JSON Web Token settings.
+    jwt_secret_key: SecretStr
+    jwt_algorithm: Literal["HS256"] = "HS256"
+    access_token_expire_minutes: int = Field(
+        default=30,
+        gt=0,
+        le=1440,
+    )
+    jwt_issuer: str = "cloud-operations-api"
+    jwt_audience: str = "cloud-operations-client"
 
     # Load the private .env file while ignoring unrelated frontend variables.
     model_config = SettingsConfigDict(

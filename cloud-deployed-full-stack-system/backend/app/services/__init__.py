@@ -18,3 +18,17 @@ __all__ = [
     "list_incidents",
     "update_incident",
 ]
+
+from app.services.auth import (
+    EmailAlreadyRegisteredError,
+    InactiveUserError,
+    InvalidCredentialsError,
+    UserNotFoundError,
+    authenticate_user,
+    change_user_role,
+    change_user_status,
+    create_user_access_token,
+    get_user,
+    list_registered_users,
+    register_user,
+)
