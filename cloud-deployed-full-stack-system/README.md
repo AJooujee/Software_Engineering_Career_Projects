@@ -6,9 +6,9 @@ This portfolio project demonstrates full-stack software engineering with React, 
 
 ## Current Status
 
-**Phase 4 - Frontend Routing and Application Layout: Complete**
+**Phase 5 - Incident Management Workflow: Complete**
 
-The application now provides responsive registration and login pages, session-based authentication state, protected React routes, role-aware navigation, authenticated workspace layouts, and a dashboard connected to the FastAPI backend.
+The application now provides a complete role-aware Incident workspace with paginated records, selected-Incident details, creation and editing forms, administrator deletion confirmation, recoverable request states, and automated frontend workflow tests connected to the FastAPI backend.
 
 ## Current Features
 
@@ -23,7 +23,13 @@ The application now provides responsive registration and login pages, session-ba
 - Authenticated dashboard with live backend health status
 - Responsive public authentication and private application layouts
 - Forbidden-access and not-found pages
-- Incident-permission summary based on the authenticated role
+- Paginated Incident queue with selected-record details
+- Viewer read-only Incident access
+- Operator Incident creation and editing
+- Administrator Incident deletion with explicit confirmation
+- Incident severity and lifecycle-status editing
+- Loading, empty, success, and recoverable error states
+- Role-aware mutation controls backed by FastAPI authorization
 - Administrator-only user-management route
 - Shared frontend API client with structured error handling
 - PostgreSQL 18 development database
@@ -45,7 +51,7 @@ The application now provides responsive registration and login pages, session-ba
 - Local CORS configuration
 - Interactive Swagger API documentation
 - Isolated backend integration tests
-- Frontend unit and route-guard tests
+- Frontend unit, API, route-guard, and Incident workflow tests
 - Reproducible Python and Node dependencies
 - Production frontend build command
 
@@ -151,12 +157,19 @@ cloud-deployed-full-stack-system/
 |   |   |   |-- auth.js
 |   |   |   |-- auth.test.js
 |   |   |   |-- client.js
-|   |   |   `-- health.js
+|   |   |   |-- health.js
+|   |   |   |-- incidents.js
+|   |   |   `-- incidents.test.js
 |   |   |-- auth/
 |   |   |   |-- AuthContext.jsx
 |   |   |   |-- token-storage.js
 |   |   |   `-- token-storage.test.js
 |   |   |-- components/
+|   |   |   |-- IncidentDeleteDialog.jsx
+|   |   |   |-- IncidentDetails.jsx
+|   |   |   |-- IncidentForm.jsx
+|   |   |   |-- IncidentList.jsx
+|   |   |   |-- Modal.jsx
 |   |   |   |-- PageHeader.jsx
 |   |   |   `-- RouteStatus.jsx
 |   |   |-- layouts/
@@ -166,6 +179,7 @@ cloud-deployed-full-stack-system/
 |   |   |   |-- DashboardPage.jsx
 |   |   |   |-- ForbiddenPage.jsx
 |   |   |   |-- IncidentsPage.jsx
+|   |   |   |-- IncidentsPage.test.jsx
 |   |   |   |-- LoginPage.jsx
 |   |   |   |-- NotFoundPage.jsx
 |   |   |   |-- RegisterPage.jsx
@@ -349,12 +363,28 @@ http://127.0.0.1:5173
 | `/login` | Signed-out users | Authenticates an existing account |
 | `/register` | Signed-out users | Creates and authenticates a viewer account |
 | `/dashboard` | Authenticated | Displays backend health and current access |
-| `/incidents` | Authenticated | Displays role-specific Incident permissions |
+| `/incidents` | Authenticated | Provides paginated role-aware Incident management |
 | `/users` | Admin | Displays the administrator workspace |
 | `/forbidden` | Authenticated | Explains insufficient route permissions |
 | Unmatched route | Any visitor | Displays the not-found page |
 
 Public-only guards redirect authenticated users away from the login and registration pages. Protected guards preserve the requested location and return signed-out users to it after successful authentication.
+
+## Frontend Incident Workflow
+
+The Incident workspace loads paginated records from the protected FastAPI API, automatically selects an available record, and presents its severity, lifecycle status, service, description, timestamps, and identifier.
+
+| Role | Available frontend actions |
+|---|---|
+| Viewer | Refresh, paginate, select, and inspect Incidents |
+| Operator | All viewer actions plus create and edit |
+| Administrator | All operator actions plus confirmed deletion |
+
+Creation accepts a title, service name, severity, and description. Editing additionally supports lifecycle transitions between `open`, `investigating`, `resolved`, and `closed`.
+
+Successful mutations display confirmation messages and synchronize the list and selected detail. Load failures provide a retry action, form failures remain inside the active modal, and deletion requires an explicit administrator confirmation.
+
+Frontend role checks control which actions are presented. FastAPI remains the security boundary and independently validates every bearer token, active account, and required role.
 
 ## Production Frontend Build
 
@@ -520,7 +550,7 @@ The backend suite verifies:
 
 ### Frontend Tests
 
-Frontend tests run with Vitest, React Testing Library, Jest DOM matchers, and jsdom.
+Frontend tests run with Vitest, React Testing Library, Jest DOM matchers, User Event, and jsdom.
 
 Run the suite from the `frontend` directory:
 
@@ -531,8 +561,8 @@ npm test
 Current expected result:
 
 ```text
-3 test files passed
-12 tests passed
+5 test files passed
+23 tests passed
 ```
 
 The frontend suite verifies:
@@ -541,12 +571,20 @@ The frontend suite verifies:
 - Saving, restoring, and removing session tokens
 - Public-only route behavior
 - Signed-out protected-route redirects
-- Authenticated protected-route access
-- Role-restricted route redirects
+- Authenticated and role-restricted route access
 - Registration payload normalization
 - OAuth2 login form construction
-- Bearer-token request headers
-- Backend authentication error propagation
+- Bearer-token request headers and authentication errors
+- Incident list and detail API requests
+- Incident creation and update payload normalization
+- Incident deletion responses
+- Viewer read-only Incident presentation
+- Operator Incident creation and editing
+- Administrator confirmed Incident deletion
+- Recoverable Incident-list failures
+- Forward and backward Incident pagination
+
+Incident workflow tests mock the browser `fetch` boundary and exercise rendered behavior without writing records to PostgreSQL.
 
 Validate the production frontend bundle with:
 
@@ -625,7 +663,7 @@ Rate limiting, refresh tokens, password recovery, email verification, Content Se
 | 2 | PostgreSQL database and backend CRUD API | Complete |
 | 3 | Authentication and role-based access control | Complete |
 | 4 | Frontend routing and application layout | Complete |
-| 5 | Incident management workflow | Planned |
+| 5 | Incident management workflow | Complete |
 | 6 | Dashboard, filtering, and audit history | Planned |
 | 7 | Docker and local service integration | Planned |
 | 8 | Automated testing and CI/CD | Planned |
