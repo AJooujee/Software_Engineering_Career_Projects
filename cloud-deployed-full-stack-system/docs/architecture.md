@@ -4,9 +4,9 @@
 
 The Cloud Operations Platform uses a client-server architecture composed of a React single-page application, a FastAPI REST API, and a PostgreSQL database.
 
-Phase 4 introduces React Router navigation, public and protected route groups, session-based authentication state, responsive authentication and application layouts, role-aware navigation, shared API clients, and automated frontend tests.
+Phase 5 completes the frontend Incident-management workflow. Authenticated users can browse paginated Incidents and inspect details, operators can create and update records, and administrators can additionally perform confirmed deletion. The interface includes reusable forms, status and severity presentation, mutation feedback, empty states, recoverable errors, and automated workflow tests.
 
-The FastAPI backend remains the authoritative security boundary. Frontend route guards control presentation and navigation, while every protected API request independently validates the JWT, current account status, and required database-backed role.
+The FastAPI backend remains the authoritative security boundary. Frontend route and role checks control presentation and navigation, while every protected API request independently validates the JWT, current account status, and required database-backed role.
 
 ## Current Architecture
 
@@ -15,7 +15,7 @@ flowchart TD
     Browser["Browser"]
     Router["React Router"]
     Auth["AuthProvider"]
-    UI["Layouts and Pages"]
+    UI["Layouts, Pages, and Incident Workspace"]
     Client["Shared API Client"]
     API["FastAPI Application"]
     Security["JWT and RBAC Dependencies"]
@@ -39,6 +39,7 @@ flowchart TD
     Repositories --> ORM
     ORM --> PostgreSQL
     FrontendTests --> Router
+    FrontendTests --> UI
     FrontendTests --> Client
     BackendTests --> API
     BackendTests --> SQLite
@@ -56,9 +57,14 @@ flowchart TD
 | Authentication layout | Presents shared branding around registration and login forms |
 | Application layout | Presents authenticated navigation, role details, and page content |
 | Dashboard | Displays backend availability and the current user's access level |
+| Incident workspace | Coordinates paginated loading, selection, mutations, and feedback |
+| Incident API module | Maps frontend form data to protected Incident CRUD requests |
+| Incident presentation components | Render the queue, selected details, severity, and lifecycle status |
+| Incident form | Supports role-authorized creation and editing |
+| Modal and delete dialog | Present focused editing and confirmed destructive actions |
 | Shared API client | Sends API requests and normalizes backend and network errors |
 | Vite | Runs the frontend development server and creates production builds |
-| Vitest | Executes frontend unit and route behavior tests |
+| Vitest | Executes frontend unit, API, route, and workflow tests |
 | React Testing Library | Tests rendered components through user-visible behavior |
 | jsdom | Provides the simulated browser environment for frontend tests |
 | FastAPI application | Configures middleware, public endpoints, and API routers |
@@ -71,7 +77,7 @@ flowchart TD
 | Repositories | Stage SQLAlchemy reads and writes without committing |
 | Pydantic schemas | Validate requests and control response serialization |
 | SQLAlchemy models | Define User and Incident database structures |
-| PostgreSQL | Persist development users and incidents |
+| PostgreSQL | Persist development users and Incidents |
 | Alembic | Version and apply database schema changes |
 | Pytest | Execute backend authentication, authorization, health, and Incident tests |
 | SQLite | Provide a disposable in-memory backend test database |
@@ -410,6 +416,8 @@ Frontend controls include:
 - Public-only and authenticated route guards
 - Administrator-only route presentation
 - Structured API and network error handling
+- Role-aware Incident mutation controls
+- Explicit confirmation before administrator deletion
 
 Frontend route restrictions do not replace backend authorization. Direct API requests are independently checked by FastAPI.
 
@@ -459,15 +467,14 @@ PostgreSQL-specific behavior is additionally verified with:
 
 ### Frontend Validation
 
-The frontend suite contains 12 automated tests across three test files.
+The frontend suite contains 23 automated tests across five test files.
 
-Vitest uses jsdom as its browser environment. React Testing Library verifies rendered route behavior, while Jest DOM provides browser-focused assertions.
+Vitest uses jsdom as its browser environment. React Testing Library and User Event exercise rendered behavior through accessible controls, while Jest DOM provides browser-focused assertions.
 
 Frontend coverage includes:
 
 - Empty token-storage state
-- Saving and restoring an access token
-- Removing a token during logout
+- Saving, restoring, and removing an access token
 - Public-only route behavior
 - Signed-out protected-route redirects
 - Authenticated route rendering
@@ -476,21 +483,31 @@ Frontend coverage includes:
 - OAuth2 login-form construction
 - Current-user bearer authorization
 - Backend authentication error propagation
-- Shared test cleanup between cases
+- Incident list, detail, create, update, and delete requests
+- Incident query-string pagination
+- Incident payload trimming and field-name mapping
+- Viewer read-only Incident presentation
+- Operator creation and editing workflows
+- Administrator confirmed deletion
+- Recoverable Incident-list failures
+- Forward and backward Incident-page navigation
+- Shared mock and DOM cleanup between cases
 
-The Vite production build provides an additional validation that imports, JSX transformation, CSS processing, and bundle generation complete successfully.
+Incident workflow tests mock the browser `fetch` boundary. They verify UI-to-API behavior without modifying PostgreSQL development data.
 
-Together, the backend and frontend suites provide:
+The Vite production build additionally validates imports, JSX transformation, CSS processing, and optimized bundle generation.
+
+Together, the backend and frontend suites provide 41 automated tests with:
 
 - Repeatable isolated state
 - HTTP-level authentication and authorization coverage
-- Frontend session and navigation coverage
+- Frontend session, navigation, and Incident workflow coverage
 - No automated test records written to PostgreSQL
 - Reproducible local validation before commit
 
 ## Frontend Design
 
-The frontend separates backend communication, authentication state, routing, reusable presentation, layouts, and pages.
+The frontend separates backend communication, authentication state, routing, reusable presentation, layouts, and page-level workflow coordination.
 
 | Area | Responsibility |
 |---|---|
@@ -498,7 +515,10 @@ The frontend separates backend communication, authentication state, routing, reu
 | `src/App.jsx` | Defines public, protected, administrator, and fallback routes |
 | `src/api/client.js` | Sends shared API requests and normalizes unsuccessful responses |
 | `src/api/auth.js` | Registers users, requests tokens, and loads the current profile |
+| `src/api/auth.test.js` | Verifies authentication request construction and errors |
 | `src/api/health.js` | Requests backend health information |
+| `src/api/incidents.js` | Sends authenticated Incident CRUD and pagination requests |
+| `src/api/incidents.test.js` | Verifies Incident URLs, payload mapping, authorization, and responses |
 | `src/auth/AuthContext.jsx` | Owns session restoration, login, registration, logout, and retry actions |
 | `src/auth/token-storage.js` | Reads, writes, and removes the session-scoped access token |
 | `src/routes/ProtectedRoute.jsx` | Requires authentication and optional roles |
@@ -507,15 +527,51 @@ The frontend separates backend communication, authentication state, routing, reu
 | `src/layouts/AppLayout.jsx` | Presents role-aware navigation and the authenticated workspace |
 | `src/components/RouteStatus.jsx` | Displays session loading and recoverable connection states |
 | `src/components/PageHeader.jsx` | Provides consistent authenticated page headings |
+| `src/components/IncidentList.jsx` | Renders selectable paginated Incident summaries |
+| `src/components/IncidentDetails.jsx` | Displays the selected Incident and permitted actions |
+| `src/components/IncidentForm.jsx` | Collects validated creation and editing fields |
+| `src/components/Modal.jsx` | Provides the shared accessible overlay container |
+| `src/components/IncidentDeleteDialog.jsx` | Requires explicit confirmation before deletion |
 | `src/pages/LoginPage.jsx` | Authenticates an existing user |
 | `src/pages/RegisterPage.jsx` | Creates and authenticates a viewer account |
 | `src/pages/DashboardPage.jsx` | Displays backend health and current-role information |
-| `src/pages/IncidentsPage.jsx` | Displays role-specific Incident capabilities before Phase 5 |
+| `src/pages/IncidentsPage.jsx` | Coordinates Incident loading, pagination, selection, and mutations |
+| `src/pages/IncidentsPage.test.jsx` | Verifies role-aware Incident workflows and failure recovery |
 | `src/pages/UsersPage.jsx` | Provides the administrator workspace placeholder |
 | `src/pages/ForbiddenPage.jsx` | Explains insufficient route access |
 | `src/pages/NotFoundPage.jsx` | Handles unmatched frontend locations |
-| `src/index.css` | Defines responsive public and authenticated layouts |
+| `src/index.css` | Defines responsive authentication, application, Incident, form, and modal styling |
 | `src/test/setup.js` | Installs frontend assertions and resets test state |
+
+### Incident Workspace Flow
+
+```mermaid
+flowchart TD
+    Page["Incident workspace"]
+    List["Paginated queue"]
+    Detail["Selected details"]
+    Form["Create or edit modal"]
+    Delete["Delete confirmation"]
+    API["Protected Incident API"]
+
+    Page --> List
+    List --> Detail
+    Page --> Form
+    Page --> Delete
+    Form --> API
+    Delete --> API
+    API --> Page
+```
+
+| Role | Read and paginate | Create | Edit | Delete |
+|---|---:|---:|---:|---:|
+| Viewer | Yes | No | No | No |
+| Operator | Yes | Yes | Yes | No |
+| Administrator | Yes | Yes | Yes | Yes |
+
+`IncidentsPage` owns request state and selected-record state. A successful creation returns the workspace to the first page, an update replaces the matching list and detail records, and deletion reloads the active page. If deletion empties a later page, navigation returns to the preceding page.
+
+Loading, empty, error, success, and busy states are rendered explicitly. Recoverable list failures expose a retry action, mutation errors remain with their active form or confirmation dialog, and the backend independently rejects unauthorized requests.
 
 ### Session State
 
@@ -546,7 +602,7 @@ The frontend does not treat possession of a token as proof of authentication. A 
 | `/forbidden` | Authenticated | Application layout |
 | Unmatched route | None | Not-found page |
 
-The responsive application layout uses a persistent sidebar on larger screens and adapts navigation and workspace content for smaller displays.
+The responsive application layout uses a persistent sidebar on larger screens and adapts navigation, forms, dialogs, and the Incident workspace for smaller displays.
 
 ## Local Ports
 
@@ -566,12 +622,12 @@ Port 5434 avoids conflicts with default PostgreSQL installations and other portf
 | 2 | PostgreSQL, SQLAlchemy, Alembic, layered Incident CRUD, and tests | Complete |
 | 3 | Argon2, JWT authentication, database-backed RBAC, and protected APIs | Complete |
 | 4 | React Router, shared API clients, authentication state, protected routes, responsive layouts, and frontend tests | Complete |
+| 5 | Role-aware Incident queue, details, CRUD modals, pagination, request states, and workflow tests | Complete |
 
 ## Planned Architecture Evolution
 
 | Phase | Architecture Addition |
 |---|---|
-| 5 | Complete Incident listing, creation, editing, and deletion interfaces |
 | 6 | Dashboard queries, filtering, metrics, and audit history |
 | 7 | Backend and frontend containers with Docker Compose networking |
 | 8 | Automated validation and deployment workflows through GitHub Actions |
