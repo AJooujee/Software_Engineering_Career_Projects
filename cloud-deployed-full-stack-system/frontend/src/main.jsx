@@ -1,7 +1,9 @@
-import { StrictMode } from "react";
+﻿import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
+import { BrowserRouter } from "react-router";
 
 import App from "./App.jsx";
+import { AuthProvider } from "./auth/AuthContext.jsx";
 import "./index.css";
 
 
@@ -13,9 +15,13 @@ if (!rootElement) {
 }
 
 
-// Render the application with additional development checks enabled.
+// Provide routing and authentication state to the application.
 createRoot(rootElement).render(
   <StrictMode>
-    <App />
+    <BrowserRouter>
+      <AuthProvider>
+        <App />
+      </AuthProvider>
+    </BrowserRouter>
   </StrictMode>,
 );

@@ -25,3 +25,6 @@ dist/
 # Operating system-generated files
 .DS_Store
 Thumbs.db
+# Frontend test reports and coverage
+.vitest/
+coverage/

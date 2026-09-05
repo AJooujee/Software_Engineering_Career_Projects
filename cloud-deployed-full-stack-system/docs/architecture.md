@@ -4,43 +4,63 @@
 
 The Cloud Operations Platform uses a client-server architecture composed of a React single-page application, a FastAPI REST API, and a PostgreSQL database.
 
-Phase 3 introduces authenticated users, Argon2 password hashing, JSON Web Tokens, database-backed role authorization, protected Incident operations, administrator user management, and a secure administrator bootstrap command.
+Phase 4 introduces React Router navigation, public and protected route groups, session-based authentication state, responsive authentication and application layouts, role-aware navigation, shared API clients, and automated frontend tests.
+
+The FastAPI backend remains the authoritative security boundary. Frontend route guards control presentation and navigation, while every protected API request independently validates the JWT, current account status, and required database-backed role.
 
 ## Current Architecture
 
 ```mermaid
 flowchart TD
-    Client["Browser or API Client"]
-    Frontend["React and Vite"]
+    Browser["Browser"]
+    Router["React Router"]
+    Auth["AuthProvider"]
+    UI["Layouts and Pages"]
+    Client["Shared API Client"]
     API["FastAPI Application"]
-    Security["Authentication and RBAC"]
+    Security["JWT and RBAC Dependencies"]
     Services["Application Services"]
     Repositories["Repositories"]
     ORM["SQLAlchemy"]
     PostgreSQL["PostgreSQL 18"]
-    Alembic["Alembic Migrations"]
-    Tests["Pytest Integration Tests"]
+    FrontendTests["Vitest and Testing Library"]
+    BackendTests["Pytest Integration Tests"]
     SQLite["SQLite In-Memory"]
 
-    Client --> Frontend
+    Browser --> Router
+    Router --> Auth
+    Auth --> UI
+    UI --> Client
+    Auth --> Client
     Client --> API
-    Frontend --> API
     API --> Security
     Security --> Services
     Services --> Repositories
     Repositories --> ORM
     ORM --> PostgreSQL
-    Alembic --> PostgreSQL
-    Tests --> API
-    Tests --> SQLite
+    FrontendTests --> Router
+    FrontendTests --> Client
+    BackendTests --> API
+    BackendTests --> SQLite
 ```
 
 ## Components
 
 | Component | Responsibility |
 |---|---|
-| React frontend | Presents the user interface and backend availability |
+| React frontend | Presents responsive public and authenticated user interfaces |
+| React Router | Defines public, protected, role-restricted, and fallback routes |
+| AuthProvider | Restores sessions and exposes authentication state and actions |
+| Token storage | Persists the JWT for the lifetime of the current browser tab |
+| Route guards | Control access to signed-out, authenticated, and role-specific pages |
+| Authentication layout | Presents shared branding around registration and login forms |
+| Application layout | Presents authenticated navigation, role details, and page content |
+| Dashboard | Displays backend availability and the current user's access level |
+| Shared API client | Sends API requests and normalizes backend and network errors |
 | Vite | Runs the frontend development server and creates production builds |
+| Vitest | Executes frontend unit and route behavior tests |
+| React Testing Library | Tests rendered components through user-visible behavior |
+| jsdom | Provides the simulated browser environment for frontend tests |
 | FastAPI application | Configures middleware, public endpoints, and API routers |
 | Authentication routes | Register users, authenticate credentials, and return the current profile |
 | Authentication dependencies | Validate bearer tokens and load the current database user |
@@ -53,8 +73,8 @@ flowchart TD
 | SQLAlchemy models | Define User and Incident database structures |
 | PostgreSQL | Persist development users and incidents |
 | Alembic | Version and apply database schema changes |
-| Pytest | Execute authentication, authorization, health, and Incident tests |
-| SQLite | Provide a disposable in-memory test database |
+| Pytest | Execute backend authentication, authorization, health, and Incident tests |
+| SQLite | Provide a disposable in-memory backend test database |
 
 ## Backend Layered Design
 
@@ -364,10 +384,11 @@ The private `.env` file is excluded through `.gitignore`. It contains:
 - JWT signing secret
 - Token algorithm and lifetime
 - Token issuer and audience
+- Frontend backend-API address
 
 The JWT secret is represented by Pydantic `SecretStr` to reduce accidental logging.
 
-Additional controls include:
+Backend controls include:
 
 - Argon2 password hashing
 - Minimum password length validation
@@ -380,16 +401,28 @@ Additional controls include:
 - Administrator self-lockout prevention
 - Isolated test credentials
 
+Frontend controls include:
+
+- Session-scoped token storage
+- Stored-token verification through `/api/auth/me`
+- Rejected-token removal after `401` or `403`
+- Safe internal return-path validation after login
+- Public-only and authenticated route guards
+- Administrator-only route presentation
+- Structured API and network error handling
+
+Frontend route restrictions do not replace backend authorization. Direct API requests are independently checked by FastAPI.
+
 CORS currently permits only:
 
-```text
-http://127.0.0.1:5173
-http://localhost:5173
-```
+- `http://127.0.0.1:5173`
+- `http://localhost:5173`
 
-Production secrets, origins, and database URLs will be supplied through the deployment environment.
+Production secrets, origins, and database URLs will be supplied through the deployment environment. Production deployment should also enforce HTTPS and a restrictive Content Security Policy.
 
 ## Testing Strategy
+
+### Backend Validation
 
 The backend suite contains 18 automated integration tests covering:
 
@@ -416,15 +449,6 @@ Tests replace the PostgreSQL dependency with SQLite in-memory storage.
 
 `StaticPool` keeps the database available across FastAPI test threads, while fixtures create and remove the schema around each test.
 
-This provides:
-
-- Repeatable test state
-- Fast execution
-- No Docker requirement during automated tests
-- No test records written to PostgreSQL
-- Separate JWT credentials for tests
-- Full HTTP-level authentication and authorization coverage
-
 PostgreSQL-specific behavior is additionally verified with:
 
 - Alembic migration execution
@@ -433,17 +457,96 @@ PostgreSQL-specific behavior is additionally verified with:
 - Live role changes
 - Live administrator access
 
+### Frontend Validation
+
+The frontend suite contains 12 automated tests across three test files.
+
+Vitest uses jsdom as its browser environment. React Testing Library verifies rendered route behavior, while Jest DOM provides browser-focused assertions.
+
+Frontend coverage includes:
+
+- Empty token-storage state
+- Saving and restoring an access token
+- Removing a token during logout
+- Public-only route behavior
+- Signed-out protected-route redirects
+- Authenticated route rendering
+- Role-restricted route redirects
+- Registration request normalization
+- OAuth2 login-form construction
+- Current-user bearer authorization
+- Backend authentication error propagation
+- Shared test cleanup between cases
+
+The Vite production build provides an additional validation that imports, JSX transformation, CSS processing, and bundle generation complete successfully.
+
+Together, the backend and frontend suites provide:
+
+- Repeatable isolated state
+- HTTP-level authentication and authorization coverage
+- Frontend session and navigation coverage
+- No automated test records written to PostgreSQL
+- Reproducible local validation before commit
+
 ## Frontend Design
 
-The frontend currently focuses on backend health visibility.
+The frontend separates backend communication, authentication state, routing, reusable presentation, layouts, and pages.
 
-| File | Responsibility |
+| Area | Responsibility |
 |---|---|
-| `src/main.jsx` | Creates the React root and renders the application |
-| `src/App.jsx` | Requests backend health and displays connection status |
-| `src/index.css` | Defines global layout and styling |
+| `src/main.jsx` | Creates the React root and installs `BrowserRouter` and `AuthProvider` |
+| `src/App.jsx` | Defines public, protected, administrator, and fallback routes |
+| `src/api/client.js` | Sends shared API requests and normalizes unsuccessful responses |
+| `src/api/auth.js` | Registers users, requests tokens, and loads the current profile |
+| `src/api/health.js` | Requests backend health information |
+| `src/auth/AuthContext.jsx` | Owns session restoration, login, registration, logout, and retry actions |
+| `src/auth/token-storage.js` | Reads, writes, and removes the session-scoped access token |
+| `src/routes/ProtectedRoute.jsx` | Requires authentication and optional roles |
+| `src/routes/PublicOnlyRoute.jsx` | Redirects authenticated users away from public authentication pages |
+| `src/layouts/AuthLayout.jsx` | Presents shared registration and login branding |
+| `src/layouts/AppLayout.jsx` | Presents role-aware navigation and the authenticated workspace |
+| `src/components/RouteStatus.jsx` | Displays session loading and recoverable connection states |
+| `src/components/PageHeader.jsx` | Provides consistent authenticated page headings |
+| `src/pages/LoginPage.jsx` | Authenticates an existing user |
+| `src/pages/RegisterPage.jsx` | Creates and authenticates a viewer account |
+| `src/pages/DashboardPage.jsx` | Displays backend health and current-role information |
+| `src/pages/IncidentsPage.jsx` | Displays role-specific Incident capabilities before Phase 5 |
+| `src/pages/UsersPage.jsx` | Provides the administrator workspace placeholder |
+| `src/pages/ForbiddenPage.jsx` | Explains insufficient route access |
+| `src/pages/NotFoundPage.jsx` | Handles unmatched frontend locations |
+| `src/index.css` | Defines responsive public and authenticated layouts |
+| `src/test/setup.js` | Installs frontend assertions and resets test state |
 
-Authentication screens, protected routing, and Incident management interfaces will be introduced in the frontend phases.
+### Session State
+
+```mermaid
+stateDiagram-v2
+    [*] --> Anonymous: No stored token
+    [*] --> Checking: Stored token
+    Checking --> Authenticated: Current profile succeeds
+    Checking --> Anonymous: Token rejected
+    Checking --> SessionError: Network failure
+    SessionError --> Checking: Retry
+    SessionError --> Anonymous: Sign out
+    Anonymous --> Authenticated: Login or registration
+    Authenticated --> Anonymous: Sign out
+```
+
+The frontend does not treat possession of a token as proof of authentication. A stored token must successfully load the current database-backed profile before protected content is rendered.
+
+### Route Structure
+
+| Route | Guard | Layout |
+|---|---|---|
+| `/login` | Public only | Authentication layout |
+| `/register` | Public only | Authentication layout |
+| `/dashboard` | Authenticated | Application layout |
+| `/incidents` | Authenticated | Application layout |
+| `/users` | Administrator | Application layout |
+| `/forbidden` | Authenticated | Application layout |
+| Unmatched route | None | Not-found page |
+
+The responsive application layout uses a persistent sidebar on larger screens and adapts navigation and workspace content for smaller displays.
 
 ## Local Ports
 
@@ -462,13 +565,13 @@ Port 5434 avoids conflicts with default PostgreSQL installations and other portf
 | 1 | React frontend, FastAPI backend, health integration, and CORS | Complete |
 | 2 | PostgreSQL, SQLAlchemy, Alembic, layered Incident CRUD, and tests | Complete |
 | 3 | Argon2, JWT authentication, database-backed RBAC, and protected APIs | Complete |
+| 4 | React Router, shared API clients, authentication state, protected routes, responsive layouts, and frontend tests | Complete |
 
 ## Planned Architecture Evolution
 
 | Phase | Architecture Addition |
 |---|---|
-| 4 | React routing, reusable components, authentication state, and protected pages |
-| 5 | Incident management interface and workflow rules |
+| 5 | Complete Incident listing, creation, editing, and deletion interfaces |
 | 6 | Dashboard queries, filtering, metrics, and audit history |
 | 7 | Backend and frontend containers with Docker Compose networking |
 | 8 | Automated validation and deployment workflows through GitHub Actions |
