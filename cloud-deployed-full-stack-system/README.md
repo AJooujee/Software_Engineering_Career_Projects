@@ -2,19 +2,30 @@
 
 A cloud-ready full-stack application for monitoring services, managing operational incidents, and controlling access through authenticated user roles.
 
-This portfolio project demonstrates full-stack software engineering with React, FastAPI, PostgreSQL, SQLAlchemy, Alembic, Argon2 password hashing, JSON Web Tokens, role-based access control, automated testing, and environment-based configuration.
+This portfolio project demonstrates full-stack software engineering with React, React Router, FastAPI, PostgreSQL, SQLAlchemy, Alembic, Argon2 password hashing, JSON Web Tokens, role-based access control, responsive interface design, automated testing, and environment-based configuration.
 
 ## Current Status
 
-**Phase 3 - Authentication and Role-Based Access Control: Complete**
+**Phase 4 - Frontend Routing and Application Layout: Complete**
 
-The backend now supports secure user registration, OAuth2 password login, JWT access tokens, administrator user management, and role-based authorization for Incident operations.
+The application now provides responsive registration and login pages, session-based authentication state, protected React routes, role-aware navigation, authenticated workspace layouts, and a dashboard connected to the FastAPI backend.
 
 ## Current Features
 
-- React single-page frontend
-- FastAPI REST API
-- Live frontend-to-backend health check
+- Responsive React single-page application
+- React Router navigation with public and protected route groups
+- Registration and login interfaces connected to FastAPI
+- Session-scoped JWT access-token storage
+- Automatic stored-session validation through `/api/auth/me`
+- Public-only route protection for authentication pages
+- Authenticated and role-restricted route guards
+- Role-aware sidebar navigation for viewers, operators, and administrators
+- Authenticated dashboard with live backend health status
+- Responsive public authentication and private application layouts
+- Forbidden-access and not-found pages
+- Incident-permission summary based on the authenticated role
+- Administrator-only user-management route
+- Shared frontend API client with structured error handling
 - PostgreSQL 18 development database
 - SQLAlchemy 2 object-relational mapping
 - Alembic database migrations
@@ -29,11 +40,12 @@ The backend now supports secure user registration, OAuth2 password login, JWT ac
 - Administrator user listing, role management, and account status management
 - Protection against administrator self-demotion and self-deactivation
 - Secure administrator bootstrap command
-- Layered route, dependency, service, repository, and database architecture
+- Layered frontend and backend architecture
 - Environment-based application configuration
 - Local CORS configuration
 - Interactive Swagger API documentation
-- Isolated SQLite integration tests
+- Isolated backend integration tests
+- Frontend unit and route-guard tests
 - Reproducible Python and Node dependencies
 - Production frontend build command
 
@@ -42,9 +54,15 @@ The backend now supports secure user registration, OAuth2 password login, JWT ac
 ### Frontend
 
 - React 19
+- React Router 8
 - Vite 8
+- Vitest 5
+- React Testing Library
+- Testing Library User Event
+- Jest DOM matchers
+- jsdom
 - JavaScript
-- CSS
+- Responsive CSS
 - Node.js 24
 
 ### Backend
@@ -129,6 +147,35 @@ cloud-deployed-full-stack-system/
 |   `-- architecture.md
 |-- frontend/
 |   |-- src/
+|   |   |-- api/
+|   |   |   |-- auth.js
+|   |   |   |-- auth.test.js
+|   |   |   |-- client.js
+|   |   |   `-- health.js
+|   |   |-- auth/
+|   |   |   |-- AuthContext.jsx
+|   |   |   |-- token-storage.js
+|   |   |   `-- token-storage.test.js
+|   |   |-- components/
+|   |   |   |-- PageHeader.jsx
+|   |   |   `-- RouteStatus.jsx
+|   |   |-- layouts/
+|   |   |   |-- AppLayout.jsx
+|   |   |   `-- AuthLayout.jsx
+|   |   |-- pages/
+|   |   |   |-- DashboardPage.jsx
+|   |   |   |-- ForbiddenPage.jsx
+|   |   |   |-- IncidentsPage.jsx
+|   |   |   |-- LoginPage.jsx
+|   |   |   |-- NotFoundPage.jsx
+|   |   |   |-- RegisterPage.jsx
+|   |   |   `-- UsersPage.jsx
+|   |   |-- routes/
+|   |   |   |-- ProtectedRoute.jsx
+|   |   |   |-- PublicOnlyRoute.jsx
+|   |   |   `-- RouteGuards.test.jsx
+|   |   |-- test/
+|   |   |   `-- setup.js
 |   |   |-- App.jsx
 |   |   |-- index.css
 |   |   `-- main.jsx
@@ -295,7 +342,49 @@ The frontend is available at:
 http://127.0.0.1:5173
 ```
 
-## Authentication Workflow
+## Frontend Routes
+
+| Route | Access | Purpose |
+|---|---|---|
+| `/login` | Signed-out users | Authenticates an existing account |
+| `/register` | Signed-out users | Creates and authenticates a viewer account |
+| `/dashboard` | Authenticated | Displays backend health and current access |
+| `/incidents` | Authenticated | Displays role-specific Incident permissions |
+| `/users` | Admin | Displays the administrator workspace |
+| `/forbidden` | Authenticated | Explains insufficient route permissions |
+| Unmatched route | Any visitor | Displays the not-found page |
+
+Public-only guards redirect authenticated users away from the login and registration pages. Protected guards preserve the requested location and return signed-out users to it after successful authentication.
+
+## Production Frontend Build
+
+Create an optimized production build from the `frontend` directory:
+
+```powershell
+npm run build
+```
+
+Vite writes the generated application to `frontend/dist`. The directory is excluded from Git because it is reproducible from the committed source and dependency lock file.
+
+## Frontend Authentication Workflow
+
+The frontend stores its access token in browser `sessionStorage`. The token is therefore shared only within the current browser tab and is removed when the tab session ends or the user signs out.
+
+When the application starts with a stored token:
+
+1. `AuthProvider` loads the token from session storage.
+2. The frontend requests `/api/auth/me`.
+3. A valid response restores the authenticated user.
+4. A `401` or `403` response removes the rejected token.
+5. A network failure displays a retryable session error without treating it as valid authentication.
+
+During login, the frontend requests an access token and then loads the current profile. The token is persisted only after both requests succeed.
+
+Successful registration creates a viewer account and automatically performs the login workflow.
+
+Frontend route guards improve navigation and presentation, but they are not the security boundary. FastAPI validates the token, active-account status, and required role for every protected API request.
+
+## Backend Authentication Workflow
 
 ### Register
 
@@ -399,6 +488,8 @@ Autogenerated migrations must be reviewed before they are applied.
 
 ## Automated Testing
 
+### Backend Tests
+
 Backend integration tests use an isolated SQLite in-memory database. They do not modify PostgreSQL development data and do not require Docker.
 
 Run the suite from the `backend` directory:
@@ -413,7 +504,7 @@ Current expected result:
 18 passed
 ```
 
-The suite verifies:
+The backend suite verifies:
 
 - Backend health and CORS behavior
 - User registration and normalized email uniqueness
@@ -426,6 +517,42 @@ The suite verifies:
 - Privilege-escalation prevention
 - Administrator self-lockout prevention
 - Incident CRUD, validation, pagination, and missing-record responses
+
+### Frontend Tests
+
+Frontend tests run with Vitest, React Testing Library, Jest DOM matchers, and jsdom.
+
+Run the suite from the `frontend` directory:
+
+```powershell
+npm test
+```
+
+Current expected result:
+
+```text
+3 test files passed
+12 tests passed
+```
+
+The frontend suite verifies:
+
+- Loading an absent session token
+- Saving, restoring, and removing session tokens
+- Public-only route behavior
+- Signed-out protected-route redirects
+- Authenticated protected-route access
+- Role-restricted route redirects
+- Registration payload normalization
+- OAuth2 login form construction
+- Bearer-token request headers
+- Backend authentication error propagation
+
+Validate the production frontend bundle with:
+
+```powershell
+npm run build
+```
 
 ## API Endpoints
 
@@ -479,9 +606,16 @@ closed
 - Authorization roles are loaded from the database rather than trusted from token claims.
 - Public registration cannot choose an elevated role.
 - Administrator endpoints prevent self-demotion and self-deactivation.
+- Browser access tokens use session storage instead of persistent local storage.
+- Rejected session tokens are removed after `401` or `403` responses.
+- Frontend route guards never replace backend authentication or authorization.
+- Unsafe external redirect destinations are rejected after login.
+- API validation errors are converted into user-readable frontend messages.
 - Test credentials and databases are isolated from development data.
 
-Rate limiting, refresh tokens, password recovery, email verification, and centralized token revocation remain future production enhancements.
+Session storage limits token persistence but does not protect a token from malicious JavaScript executing in the same page. Production deployment must maintain strict script controls and avoid unsafe HTML injection.
+
+Rate limiting, refresh tokens, password recovery, email verification, Content Security Policy enforcement, and centralized token revocation remain future production enhancements.
 
 ## Development Roadmap
 
@@ -490,7 +624,7 @@ Rate limiting, refresh tokens, password recovery, email verification, and centra
 | 1 | Project foundation and health integration | Complete |
 | 2 | PostgreSQL database and backend CRUD API | Complete |
 | 3 | Authentication and role-based access control | Complete |
-| 4 | Frontend routing and application layout | Planned |
+| 4 | Frontend routing and application layout | Complete |
 | 5 | Incident management workflow | Planned |
 | 6 | Dashboard, filtering, and audit history | Planned |
 | 7 | Docker and local service integration | Planned |

@@ -1,80 +1,59 @@
-import { useEffect, useState } from "react";
+﻿/**
+ * Route configuration for the Cloud Operations frontend.
+ */
 
+import {
+  Navigate,
+  Route,
+  Routes,
+} from "react-router";
 
-// Use the configured API address or fall back to the local FastAPI server.
-const API_BASE_URL =
-  import.meta.env.VITE_API_BASE_URL ?? "http://127.0.0.1:8000";
+import { AppLayout } from "./layouts/AppLayout.jsx";
+import { AuthLayout } from "./layouts/AuthLayout.jsx";
+import { DashboardPage } from "./pages/DashboardPage.jsx";
+import { ForbiddenPage } from "./pages/ForbiddenPage.jsx";
+import { IncidentsPage } from "./pages/IncidentsPage.jsx";
+import { LoginPage } from "./pages/LoginPage.jsx";
+import { NotFoundPage } from "./pages/NotFoundPage.jsx";
+import { RegisterPage } from "./pages/RegisterPage.jsx";
+import { UsersPage } from "./pages/UsersPage.jsx";
+import { ProtectedRoute } from "./routes/ProtectedRoute.jsx";
+import { PublicOnlyRoute } from "./routes/PublicOnlyRoute.jsx";
 
 
 function App() {
-  // Track the connection state between the React frontend and backend API.
-  const [connection, setConnection] = useState({
-    status: "checking",
-    message: "Checking backend connection...",
-  });
-
-  useEffect(() => {
-    // Abort the request if this component is removed before it completes.
-    const controller = new AbortController();
-
-    async function checkBackendHealth() {
-      try {
-        const response = await fetch(`${API_BASE_URL}/health`, {
-          signal: controller.signal,
-        });
-
-        if (!response.ok) {
-          throw new Error(`Backend returned status ${response.status}`);
-        }
-
-        const health = await response.json();
-
-        setConnection({
-          status: health.status === "healthy" ? "healthy" : "error",
-          message: `Connected to ${health.service}`,
-        });
-      } catch (error) {
-        // Ignore cancellation caused by React development checks.
-        if (error.name === "AbortError") {
-          return;
-        }
-
-        setConnection({
-          status: "error",
-          message: "Unable to connect to the backend API",
-        });
-      }
-    }
-
-    checkBackendHealth();
-
-    // Cancel any unfinished request during component cleanup.
-    return () => controller.abort();
-  }, []);
-
   return (
-    <main className="app-shell">
-      <section className="hero">
-        <p className="eyebrow">Cloud-Deployed Full-Stack System</p>
-        <h1>Cloud Operations Platform</h1>
-        <p className="description">
-          Monitor services, manage incidents, and track operational health
-          through one cloud-ready application.
-        </p>
+    <Routes>
+      <Route element={<PublicOnlyRoute />}>
+        <Route element={<AuthLayout />}>
+          <Route path="login" element={<LoginPage />} />
+          <Route path="register" element={<RegisterPage />} />
+        </Route>
+      </Route>
 
-        <div className="status-card" role="status" aria-live="polite">
-          <span
-            className={`status-indicator status-indicator--${connection.status}`}
-            aria-hidden="true"
+      <Route element={<ProtectedRoute />}>
+        <Route element={<AppLayout />}>
+          <Route
+            index
+            element={<Navigate to="/dashboard" replace />}
           />
 
-          <div>
-            <p className="status-label">Backend API status</p>
-            <p className="status-message">{connection.message}</p>
-          </div>
-        </div>
-      </section>
-    </main>
+          <Route path="dashboard" element={<DashboardPage />} />
+          <Route path="incidents" element={<IncidentsPage />} />
+          <Route path="forbidden" element={<ForbiddenPage />} />
+
+          <Route
+            element={
+              <ProtectedRoute allowedRoles={["admin"]} />
+            }
+          >
+            <Route path="users" element={<UsersPage />} />
+          </Route>
+        </Route>
+      </Route>
+
+      <Route path="*" element={<NotFoundPage />} />
+    </Routes>
   );
 }
 

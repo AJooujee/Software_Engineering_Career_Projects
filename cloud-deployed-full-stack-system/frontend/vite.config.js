@@ -1,7 +1,8 @@
-import { defineConfig } from "vite";
+﻿import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
 
-// Configure Vite for the React development environment.
+
+// Configure Vite for development, production builds, and frontend tests.
 export default defineConfig({
   // Enable React JSX transformation and Fast Refresh.
   plugins: [react()],
@@ -14,5 +15,13 @@ export default defineConfig({
     host: "127.0.0.1",
     port: 5173,
     strictPort: true,
+  },
+
+  test: {
+    // Provide browser DOM APIs to React Testing Library.
+    environment: "jsdom",
+    setupFiles: "./src/test/setup.js",
+    clearMocks: true,
+    restoreMocks: true,
   },
 });
