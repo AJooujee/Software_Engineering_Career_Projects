@@ -1,4 +1,4 @@
-﻿/**
+/**
  * Complete role-aware workflow for operational Incident management.
  */
 
@@ -18,6 +18,7 @@ import {
 import { useAuth } from "../auth/AuthContext.jsx";
 import { IncidentDeleteDialog } from "../components/IncidentDeleteDialog.jsx";
 import { IncidentDetails } from "../components/IncidentDetails.jsx";
+import { IncidentFilters } from "../components/IncidentFilters.jsx";
 import { IncidentForm } from "../components/IncidentForm.jsx";
 import { IncidentList } from "../components/IncidentList.jsx";
 import { Modal } from "../components/Modal.jsx";
@@ -25,6 +26,26 @@ import { PageHeader } from "../components/PageHeader.jsx";
 
 
 const PAGE_SIZE = 10;
+
+const EMPTY_FILTERS = {
+  search: "",
+  status: "",
+  severity: "",
+  serviceName: "",
+};
+
+
+/**
+ * Trim free-text filters before sending them to the API.
+ */
+function normalizeFilters(filters) {
+  return {
+    search: filters.search.trim(),
+    status: filters.status,
+    severity: filters.severity,
+    serviceName: filters.serviceName.trim(),
+  };
+}
 
 
 export function IncidentsPage() {
@@ -38,6 +59,14 @@ export function IncidentsPage() {
   const [selectedIncident, setSelectedIncident] = useState(null);
   const [offset, setOffset] = useState(0);
   const [reloadVersion, setReloadVersion] = useState(0);
+
+  // Draft changes do not request data until the user applies them.
+  const [draftFilters, setDraftFilters] = useState({
+    ...EMPTY_FILTERS,
+  });
+  const [appliedFilters, setAppliedFilters] = useState({
+    ...EMPTY_FILTERS,
+  });
 
   const [loadStatus, setLoadStatus] = useState("loading");
   const [loadError, setLoadError] = useState(null);
@@ -55,6 +84,9 @@ export function IncidentsPage() {
     user?.role,
   );
   const canDeleteIncidents = user?.role === "admin";
+  const hasActiveFilters = Object.values(
+    appliedFilters,
+  ).some(Boolean);
 
   const pageNumber = Math.floor(offset / PAGE_SIZE) + 1;
   const hasPreviousPage = offset > 0;
@@ -71,6 +103,10 @@ export function IncidentsPage() {
           {
             offset,
             limit: PAGE_SIZE,
+            search: appliedFilters.search,
+            status: appliedFilters.status,
+            severity: appliedFilters.severity,
+            serviceName: appliedFilters.serviceName,
             signal,
           },
         );
@@ -122,7 +158,12 @@ export function IncidentsPage() {
         setLoadStatus("error");
       }
     },
-    [accessToken, logout, offset],
+    [
+      accessToken,
+      appliedFilters,
+      logout,
+      offset,
+    ],
   );
 
   useEffect(() => {
@@ -134,6 +175,28 @@ export function IncidentsPage() {
 
     return () => controller.abort();
   }, [loadIncidentPage, reloadVersion]);
+
+  function applyIncidentFilters() {
+    const normalizedFilters = normalizeFilters(
+      draftFilters,
+    );
+
+    setNotice(null);
+    setDraftFilters(normalizedFilters);
+    setAppliedFilters(normalizedFilters);
+    setOffset(0);
+  }
+
+  function clearIncidentFilters() {
+    const clearedFilters = {
+      ...EMPTY_FILTERS,
+    };
+
+    setNotice(null);
+    setDraftFilters(clearedFilters);
+    setAppliedFilters(clearedFilters);
+    setOffset(0);
+  }
 
   function refreshIncidentPage() {
     setNotice(null);
@@ -308,6 +371,15 @@ export function IncidentsPage() {
         )}
       </PageHeader>
 
+      <IncidentFilters
+        value={draftFilters}
+        hasActiveFilters={hasActiveFilters}
+        isLoading={loadStatus === "loading"}
+        onChange={setDraftFilters}
+        onApply={applyIncidentFilters}
+        onClear={clearIncidentFilters}
+      />
+
       {notice && (
         <div
           className="form-alert form-alert--success"
@@ -355,7 +427,22 @@ export function IncidentsPage() {
         </section>
       )}
 
-      {loadStatus === "ready" && incidents.length === 0 && (
+      {loadStatus === "ready"
+        && incidents.length === 0
+        && hasActiveFilters && (
+        <section className="content-panel empty-state">
+          <p className="eyebrow">Filtered results</p>
+          <h2>No incidents match the current filters</h2>
+          <p>
+            Adjust or clear the filters to return to the complete
+            operational Incident queue.
+          </p>
+        </section>
+      )}
+
+      {loadStatus === "ready"
+        && incidents.length === 0
+        && !hasActiveFilters && (
         <section className="content-panel empty-state">
           <p className="eyebrow">Incident workspace</p>
           <h2>No incidents have been reported</h2>

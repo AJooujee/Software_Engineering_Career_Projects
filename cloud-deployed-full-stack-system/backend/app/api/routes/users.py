@@ -109,6 +109,7 @@ def update_user_role(
             database_session,
             user_id,
             user_data.role,
+            actor=administrator,
         )
     except auth_service.UserNotFoundError as error:
         raise user_not_found_response(error) from error
@@ -141,6 +142,7 @@ def update_user_status(
             database_session,
             user_id,
             is_active=user_data.is_active,
+            actor=administrator,
         )
     except auth_service.UserNotFoundError as error:
         raise user_not_found_response(error) from error

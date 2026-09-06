@@ -10,6 +10,7 @@ from app.api.dependencies import (
     DatabaseSession,
     require_roles,
 )
+from app.models.incident import IncidentSeverity, IncidentStatus
 from app.models.user import User, UserRole
 from app.schemas.incident import (
     IncidentCreate,
@@ -64,11 +65,10 @@ def create_incident(
 ) -> IncidentResponse:
     """Create an incident when the user is an operator or administrator."""
 
-    del authorized_user
-
     return incident_service.create_incident(
         database_session,
         incident_data,
+        actor=authorized_user,
     )
 
 
@@ -80,15 +80,35 @@ def create_incident(
 def list_incidents(
     database_session: DatabaseSession,
     current_user: CurrentUser,
+    search: Annotated[
+        str | None,
+        Query(min_length=1, max_length=200),
+    ] = None,
+    incident_status: Annotated[
+        IncidentStatus | None,
+        Query(alias="status"),
+    ] = None,
+    incident_severity: Annotated[
+        IncidentSeverity | None,
+        Query(alias="severity"),
+    ] = None,
+    service_name: Annotated[
+        str | None,
+        Query(min_length=2, max_length=120),
+    ] = None,
     offset: Annotated[int, Query(ge=0)] = 0,
     limit: Annotated[int, Query(ge=1, le=100)] = 20,
 ) -> list[IncidentResponse]:
-    """Return incidents to any authenticated active user."""
+    """Return filtered Incidents to any authenticated active user."""
 
     del current_user
 
     return incident_service.list_incidents(
         database_session,
+        search=search,
+        status=incident_status,
+        severity=incident_severity,
+        service_name=service_name,
         offset=offset,
         limit=limit,
     )
@@ -130,13 +150,12 @@ def update_incident(
 ) -> IncidentResponse:
     """Update an incident as an operator or administrator."""
 
-    del authorized_user
-
     try:
         return incident_service.update_incident(
             database_session,
             incident_id,
             incident_data,
+            actor=authorized_user,
         )
     except incident_service.IncidentNotFoundError as error:
         raise incident_not_found_response(error) from error
@@ -154,12 +173,11 @@ def delete_incident(
 ) -> Response:
     """Delete an incident when the current user is an administrator."""
 
-    del administrator
-
     try:
         incident_service.delete_incident(
             database_session,
             incident_id,
+            actor=administrator,
         )
     except incident_service.IncidentNotFoundError as error:
         raise incident_not_found_response(error) from error

@@ -10,9 +10,11 @@ from app.core.security import (
     hash_password,
     verify_password,
 )
+from app.models.audit_event import AuditAction, AuditResourceType
 from app.models.user import User, UserRole
 import app.repositories.users as user_repository
 from app.schemas.user import UserCreate
+import app.services.audit_events as audit_service
 
 
 class EmailAlreadyRegisteredError(ValueError):
@@ -162,10 +164,20 @@ def change_user_role(
     database_session: Session,
     user_id: UUID,
     role: UserRole,
+    *,
+    actor: User,
 ) -> User:
-    """Change and commit the authorization role assigned to one user."""
+    """Change a user role and atomically record the administrator."""
 
     user = get_user(database_session, user_id)
+    changes = audit_service.build_change_set(
+        {"role": user.role},
+        {"role": role},
+    )
+
+    # Avoid writes and audit noise when the requested role already applies.
+    if not changes:
+        return user
 
     try:
         updated_user = user_repository.update_user_role(
@@ -173,9 +185,21 @@ def change_user_role(
             user,
             role,
         )
+
+        audit_service.record_audit_event(
+            database_session,
+            actor=actor,
+            action=AuditAction.USER_ROLE_CHANGED,
+            resource_type=AuditResourceType.USER,
+            resource_id=updated_user.id,
+            resource_label=updated_user.email,
+            changes=changes,
+        )
+
         database_session.commit()
         return updated_user
     except Exception:
+        # Roll back both the role change and its audit event.
         database_session.rollback()
         raise
 
@@ -185,10 +209,19 @@ def change_user_status(
     user_id: UUID,
     *,
     is_active: bool,
+    actor: User,
 ) -> User:
-    """Activate or disable one user account and commit the change."""
+    """Change account status and atomically record the administrator."""
 
     user = get_user(database_session, user_id)
+    changes = audit_service.build_change_set(
+        {"is_active": user.is_active},
+        {"is_active": is_active},
+    )
+
+    # Repeating the current state is successful but not audit-worthy.
+    if not changes:
+        return user
 
     try:
         updated_user = user_repository.update_user_status(
@@ -196,8 +229,20 @@ def change_user_status(
             user,
             is_active=is_active,
         )
+
+        audit_service.record_audit_event(
+            database_session,
+            actor=actor,
+            action=AuditAction.USER_STATUS_CHANGED,
+            resource_type=AuditResourceType.USER,
+            resource_id=updated_user.id,
+            resource_label=updated_user.email,
+            changes=changes,
+        )
+
         database_session.commit()
         return updated_user
     except Exception:
+        # Roll back both the status change and its audit event.
         database_session.rollback()
         raise
