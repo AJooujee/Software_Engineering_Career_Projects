@@ -1,0 +1,123 @@
+name: cloud-operations
+
+x-backend-environment: &backend-environment
+  APP_ENV: container
+  DATABASE_URL: "postgresql+psycopg://${POSTGRES_USER:-cloud_ops}:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set in .env}@postgres:5432/${POSTGRES_DB:-cloud_operations}"
+  JWT_SECRET_KEY: "${JWT_SECRET_KEY:?JWT_SECRET_KEY must be set in .env}"
+  JWT_ALGORITHM: "${JWT_ALGORITHM:-HS256}"
+  ACCESS_TOKEN_EXPIRE_MINUTES: "${ACCESS_TOKEN_EXPIRE_MINUTES:-30}"
+  JWT_ISSUER: "${JWT_ISSUER:-cloud-operations-api}"
+  JWT_AUDIENCE: "${JWT_AUDIENCE:-cloud-operations-client}"
+
+services:
+  postgres:
+    image: postgres:18-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: "${POSTGRES_DB:-cloud_operations}"
+      POSTGRES_USER: "${POSTGRES_USER:-cloud_ops}"
+      POSTGRES_PASSWORD: "${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set in .env}"
+    volumes:
+      - postgres_data:/var/lib/postgresql
+    networks:
+      - data
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - >-
+          pg_isready
+          -U "$${POSTGRES_USER}"
+          -d "$${POSTGRES_DB}"
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 10s
+
+  migration:
+    image: cloud-operations-backend:local
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    restart: "no"
+    environment: *backend-environment
+    command:
+      - python
+      - -m
+      - alembic
+      - upgrade
+      - head
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - data
+
+  backend:
+    image: cloud-operations-backend:local
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    init: true
+    environment: *backend-environment
+    ports:
+      - "127.0.0.1:${COMPOSE_BACKEND_PORT:-8001}:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      migration:
+        condition: service_completed_successfully
+    networks:
+      - data
+      - edge
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - >-
+          import urllib.request;
+          urllib.request.urlopen(
+          'http://127.0.0.1:8000/health',
+          timeout=2
+          )
+      interval: 10s
+      timeout: 3s
+      retries: 5
+      start_period: 10s
+
+  frontend:
+    image: cloud-operations-frontend:local
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+      args:
+        VITE_API_BASE_URL: /
+    restart: unless-stopped
+    init: true
+    ports:
+      - "127.0.0.1:${COMPOSE_FRONTEND_PORT:-8080}:8080"
+    depends_on:
+      backend:
+        condition: service_healthy
+    networks:
+      - edge
+    healthcheck:
+      test:
+        - CMD
+        - wget
+        - --quiet
+        - --output-document=/dev/null
+        - http://127.0.0.1:8080/
+      interval: 10s
+      timeout: 3s
+      retries: 5
+      start_period: 5s
+
+networks:
+  data:
+    internal: true
+  edge:
+
+volumes:
+  postgres_data:
