@@ -53,11 +53,31 @@ function createIncidentPayload(incidentData) {
 
 
 /**
- * Return a paginated collection of Incidents.
+ * Add a non-empty normalized string to an API query.
+ */
+function addQueryValue(query, name, value) {
+  if (typeof value !== "string") {
+    return;
+  }
+
+  const normalizedValue = value.trim();
+
+  if (normalizedValue) {
+    query.set(name, normalizedValue);
+  }
+}
+
+
+/**
+ * Return a filtered, paginated collection of Incidents.
  */
 export function listIncidents(
   accessToken,
   {
+    search = "",
+    status = "",
+    severity = "",
+    serviceName = "",
     offset = 0,
     limit = 20,
     signal,
@@ -67,6 +87,12 @@ export function listIncidents(
     offset: String(offset),
     limit: String(limit),
   });
+
+  // Keep frontend field names readable while matching backend parameters.
+  addQueryValue(query, "search", search);
+  addQueryValue(query, "status", status);
+  addQueryValue(query, "severity", severity);
+  addQueryValue(query, "service_name", serviceName);
 
   return apiRequest(`${INCIDENTS_PATH}?${query}`, {
     accessToken,

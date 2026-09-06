@@ -6,9 +6,17 @@ from app.models.incident import (
     IncidentStatus,
 )
 from app.models.user import User, UserRole
+from app.models.audit_event import (
+    AuditAction,
+    AuditEvent,
+    AuditResourceType,
+)
 
 
 __all__ = [
+    "AuditAction",
+    "AuditEvent",
+    "AuditResourceType",
     "Incident",
     "IncidentSeverity",
     "IncidentStatus",

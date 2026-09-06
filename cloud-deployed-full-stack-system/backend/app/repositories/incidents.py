@@ -2,10 +2,14 @@
 
 from uuid import UUID
 
-from sqlalchemy import select
+from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
 
-from app.models.incident import Incident
+from app.models.incident import (
+    Incident,
+    IncidentSeverity,
+    IncidentStatus,
+)
 from app.schemas.incident import IncidentCreate, IncidentUpdate
 
 
@@ -24,17 +28,85 @@ def create_incident(
     return incident
 
 
+def escape_like_value(value: str) -> str:
+    """Escape SQL wildcard characters so search terms remain literal."""
+
+    return (
+        value.replace("\\", "\\\\")
+        .replace("%", r"\%")
+        .replace("_", r"\_")
+    )
+
+
 def list_incidents(
     database_session: Session,
     *,
+    search: str | None = None,
+    status: IncidentStatus | None = None,
+    severity: IncidentSeverity | None = None,
+    service_name: str | None = None,
     offset: int = 0,
     limit: int = 100,
 ) -> list[Incident]:
-    """Return incidents ordered from newest to oldest."""
+    """Return filtered incidents ordered from newest to oldest."""
+
+    statement = select(Incident)
+
+    # Search the human-readable Incident fields without treating user input
+    # as SQL wildcard syntax.
+    normalized_search = search.strip() if search else ""
+
+    if normalized_search:
+        escaped_search = escape_like_value(normalized_search)
+        search_pattern = f"%{escaped_search}%"
+
+        statement = statement.where(
+            or_(
+                Incident.title.ilike(
+                    search_pattern,
+                    escape="\\",
+                ),
+                Incident.description.ilike(
+                    search_pattern,
+                    escape="\\",
+                ),
+                Incident.service_name.ilike(
+                    search_pattern,
+                    escape="\\",
+                ),
+            )
+        )
+
+    # Service filtering uses a normalized exact match so similarly named
+    # services do not appear in the same result set.
+    normalized_service_name = (
+        service_name.strip().lower()
+        if service_name
+        else ""
+    )
+
+    if normalized_service_name:
+        statement = statement.where(
+            func.lower(Incident.service_name)
+            == normalized_service_name
+        )
+
+    if status is not None:
+        statement = statement.where(
+            Incident.status == status,
+        )
+
+    if severity is not None:
+        statement = statement.where(
+            Incident.severity == severity,
+        )
 
     statement = (
-        select(Incident)
-        .order_by(Incident.created_at.desc())
+        statement
+        .order_by(
+            Incident.created_at.desc(),
+            Incident.id.desc(),
+        )
         .offset(offset)
         .limit(limit)
     )

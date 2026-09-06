@@ -89,6 +89,29 @@ describe("Incident API", () => {
     ).toBe(`Bearer ${accessToken}`);
   });
 
+  it("adds normalized Incident filters to the list query", async () => {
+    globalThis.fetch.mockResolvedValueOnce(
+      jsonResponse([]),
+    );
+
+    await listIncidents(accessToken, {
+      search: "  payment latency  ",
+      status: "investigating",
+      severity: "high",
+      serviceName: "  payments-api  ",
+    });
+
+    // Preserve pagination while mapping frontend filter names to the API.
+    expect(globalThis.fetch.mock.calls[0][0]).toBe(
+      "http://127.0.0.1:8000/api/incidents"
+      + "?offset=0&limit=20"
+      + "&search=payment+latency"
+      + "&status=investigating"
+      + "&severity=high"
+      + "&service_name=payments-api",
+    );
+  });
+
   it("retrieves one Incident by its encoded identifier", async () => {
     globalThis.fetch.mockResolvedValueOnce(
       jsonResponse(incidentResponse),

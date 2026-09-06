@@ -1,86 +1,51 @@
-﻿# Cloud Operations Platform Architecture
+# Cloud Operations Platform Architecture
 
 ## Overview
 
-The Cloud Operations Platform uses a client-server architecture composed of a React single-page application, a FastAPI REST API, and a PostgreSQL database.
+Phase 6 extends the authenticated full-stack architecture with operational aggregation, server-side Incident filtering, and immutable audit history.
 
-Phase 5 completes the frontend Incident-management workflow. Authenticated users can browse paginated Incidents and inspect details, operators can create and update records, and administrators can additionally perform confirmed deletion. The interface includes reusable forms, status and severity presentation, mutation feedback, empty states, recoverable errors, and automated workflow tests.
+FastAPI remains the security and transaction boundary. Dashboard queries aggregate operational data without changing it. Incident and user mutations create their audit records inside the same SQLAlchemy transaction, preventing business state and audit history from diverging.
 
-The FastAPI backend remains the authoritative security boundary. Frontend route and role checks control presentation and navigation, while every protected API request independently validates the JWT, current account status, and required database-backed role.
+The React frontend consumes dedicated Incident, dashboard, and audit API modules. Every authenticated role can view dashboard metrics, while only administrators can request and view audit history.
 
 ## Current Architecture
 
 ```mermaid
 flowchart TD
-    Browser["Browser"]
-    Router["React Router"]
-    Auth["AuthProvider"]
-    UI["Layouts, Pages, and Incident Workspace"]
-    Client["Shared API Client"]
-    API["FastAPI Application"]
-    Security["JWT and RBAC Dependencies"]
-    Services["Application Services"]
-    Repositories["Repositories"]
-    ORM["SQLAlchemy"]
-    PostgreSQL["PostgreSQL 18"]
-    FrontendTests["Vitest and Testing Library"]
-    BackendTests["Pytest Integration Tests"]
-    SQLite["SQLite In-Memory"]
+    Browser["React browser application"]
+    API["FastAPI routes and authorization"]
+    Services["Business and audit transactions"]
+    Repositories["Queries and staged writes"]
+    Database["PostgreSQL"]
 
-    Browser --> Router
-    Router --> Auth
-    Auth --> UI
-    UI --> Client
-    Auth --> Client
-    Client --> API
-    API --> Security
-    Security --> Services
+    Browser -->|JWT API requests| API
+    API --> Services
     Services --> Repositories
-    Repositories --> ORM
-    ORM --> PostgreSQL
-    FrontendTests --> Router
-    FrontendTests --> UI
-    FrontendTests --> Client
-    BackendTests --> API
-    BackendTests --> SQLite
+    Repositories --> Database
+    Database -->|Incidents, metrics, audit events| Browser
 ```
+
+The dashboard path performs read-only aggregate queries. The mutation path stages the resource change and its audit event before one service-owned commit.
 
 ## Components
 
 | Component | Responsibility |
 |---|---|
-| React frontend | Presents responsive public and authenticated user interfaces |
-| React Router | Defines public, protected, role-restricted, and fallback routes |
-| AuthProvider | Restores sessions and exposes authentication state and actions |
-| Token storage | Persists the JWT for the lifetime of the current browser tab |
-| Route guards | Control access to signed-out, authenticated, and role-specific pages |
-| Authentication layout | Presents shared branding around registration and login forms |
 | Application layout | Presents authenticated navigation, role details, and page content |
-| Dashboard | Displays backend availability and the current user's access level |
-| Incident workspace | Coordinates paginated loading, selection, mutations, and feedback |
-| Incident API module | Maps frontend form data to protected Incident CRUD requests |
-| Incident presentation components | Render the queue, selected details, severity, and lifecycle status |
-| Incident form | Supports role-authorized creation and editing |
-| Modal and delete dialog | Present focused editing and confirmed destructive actions |
-| Shared API client | Sends API requests and normalizes backend and network errors |
-| Vite | Runs the frontend development server and creates production builds |
-| Vitest | Executes frontend unit, API, route, and workflow tests |
-| React Testing Library | Tests rendered components through user-visible behavior |
-| jsdom | Provides the simulated browser environment for frontend tests |
-| FastAPI application | Configures middleware, public endpoints, and API routers |
-| Authentication routes | Register users, authenticate credentials, and return the current profile |
-| Authentication dependencies | Validate bearer tokens and load the current database user |
-| User routes | Provide administrator-only user and role management |
-| Incident routes | Enforce role permissions and translate Incident HTTP requests |
-| Security utilities | Hash passwords and create or validate JWT access tokens |
-| Services | Apply business rules and control transaction boundaries |
-| Repositories | Stage SQLAlchemy reads and writes without committing |
-| Pydantic schemas | Validate requests and control response serialization |
-| SQLAlchemy models | Define User and Incident database structures |
-| PostgreSQL | Persist development users and Incidents |
-| Alembic | Version and apply database schema changes |
-| Pytest | Execute backend authentication, authorization, health, and Incident tests |
-| SQLite | Provide a disposable in-memory backend test database |
+| Dashboard page | Displays metrics, operational distributions, request states, and admin audit history |
+| Incident workspace | Coordinates filters, pagination, selection, mutations, and feedback |
+| Incident filters | Separates draft controls from applied API query values |
+| Frontend API modules | Send authenticated Incident, dashboard, and audit requests |
+| FastAPI dependencies | Validate bearer tokens and enforce database-backed roles |
+| Incident routes and service | Enforce permissions and coordinate Incident transactions |
+| Dashboard route and repository | Return authenticated read-only aggregate metrics |
+| Audit route and repository | Return administrator-only immutable history |
+| User service | Coordinates role or status mutations with audit events |
+| SQLAlchemy repositories | Read records and stage writes without committing |
+| PostgreSQL | Persists users, Incidents, and audit events |
+| Alembic | Versions and applies database schema changes |
+| Pytest | Exercises backend behavior with isolated database state |
+| Vitest and Testing Library | Exercise frontend APIs and user-visible workflows |
 
 ## Backend Layered Design
 
@@ -216,34 +181,18 @@ The JWT does not contain the User role.
 
 ## Role-Based Access Control
 
-The application defines three roles:
-
-| Role | Responsibility |
-|---|---|
-| `viewer` | Read operational Incident information |
-| `operator` | Read, create, and update Incidents |
-| `admin` | Perform all Incident operations and manage users |
-
-The enforced permission matrix is:
-
 | Operation | Viewer | Operator | Admin |
 |---|---:|---:|---:|
-| List incidents | Yes | Yes | Yes |
-| Retrieve an incident | Yes | Yes | Yes |
-| Create an incident | No | Yes | Yes |
-| Update an incident | No | Yes | Yes |
-| Delete an incident | No | No | Yes |
-| List users | No | No | Yes |
-| Retrieve a user | No | No | Yes |
-| Change user roles | No | No | Yes |
-| Activate or disable users | No | No | Yes |
+| View dashboard metrics | Yes | Yes | Yes |
+| View audit history | No | No | Yes |
+| List, retrieve, and filter incidents | Yes | Yes | Yes |
+| Create incidents | No | Yes | Yes |
+| Update incidents | No | Yes | Yes |
+| Delete incidents | No | No | Yes |
+| List and retrieve users | No | No | Yes |
+| Change user roles or status | No | No | Yes |
 
-Administrator routes prevent the current administrator from:
-
-- Removing their own administrator role
-- Disabling their own account
-
-This avoids accidental self-lockout through the API.
+Authenticated requests reload the current User from PostgreSQL. Role and account-status changes therefore apply immediately to existing tokens. Administrators cannot remove their own administrator role or disable their own account.
 
 ## Administrator Bootstrap
 
@@ -265,17 +214,18 @@ The command is idempotent and handles `Ctrl + C` without displaying a traceback.
 
 ## Transaction Management
 
-Repositories stage database changes with `flush()` and do not finalize transactions.
+Repositories use `flush()` to materialize generated identifiers and stage database changes without finalizing them. Services own every commit and rollback.
 
-Services control transaction boundaries:
+For audited mutations, the service performs these operations in one transaction:
 
-- Successful User and Incident writes call `commit()`.
-- Failed writes call `rollback()`.
-- Read operations do not create explicit commits.
-- Duplicate registration handles database uniqueness races and rolls back the session.
-- FastAPI closes each request session through the `get_db` dependency.
+1. Validate the actor and requested change.
+2. Load the current resource state.
+3. Stage the Incident or User mutation.
+4. Build safe field-level change metadata.
+5. Stage an immutable AuditEvent with actor and resource snapshots.
+6. Commit both writes together.
 
-This keeps transaction ownership out of HTTP routes and low-level repositories.
+Any exception rolls back both the business mutation and the audit event. Failed authorization, missing resources, and no-op changes do not produce audit records.
 
 ## User Data Model
 
@@ -360,24 +310,35 @@ Incident indexes:
 | `ix_incidents_service_name` | Supports affected-service filtering |
 | `ix_incidents_status` | Supports lifecycle-status filtering |
 
+## Audit Event Data Model
+
+The `audit_events` table stores immutable security and operational history.
+
+| Column | Purpose |
+|---|---|
+| `id` | UUID primary key |
+| `action` | Stable action such as `incident.updated` or `user.role_changed` |
+| `actor_id` | Nullable reference to the acting User |
+| `actor_email` | Safe actor snapshot retained if the User later changes |
+| `resource_type` | Resource category such as `incident` or `user` |
+| `resource_id` | Identifier of the affected resource |
+| `resource_label` | Human-readable snapshot retained after deletion |
+| `changes` | JSON field-level before-and-after metadata |
+| `created_at` | Immutable event timestamp |
+
+The application exposes no create, update, or delete audit route. Passwords, password hashes, bearer tokens, and secrets are never included in `changes`.
+
 ## Migration Strategy
 
 Alembic reads the database URL from application settings and discovers models through `Base.metadata`.
-
-Current migration history:
 
 | Revision | Change |
 |---|---|
 | `2ef9cb82e708` | Creates the Incident table, constraints, and indexes |
 | `6b0140f7a01f` | Creates the User table, role constraint, and indexes |
+| `7c9e4b2a6d10` | Creates the AuditEvent table and lookup indexes |
 
-Schema changes follow this workflow:
-
-1. Update a SQLAlchemy model.
-2. Generate an Alembic revision with `--autogenerate`.
-3. Review the generated migration.
-4. Apply the migration with `alembic upgrade head`.
-5. Verify schema consistency with `alembic check`.
+Schema changes follow a reviewed model, revision, upgrade, and `alembic check` workflow.
 
 ## Configuration and Security
 
@@ -432,163 +393,51 @@ Production secrets, origins, and database URLs will be supplied through the depl
 
 ### Backend Validation
 
-The backend suite contains 18 automated integration tests covering:
+The backend suite contains **26 integration tests**. In addition to health, authentication, authorization, and CRUD behavior, Phase 6 covers Incident filters, dashboard aggregates, admin-only audit access, change metadata, actor snapshots, failed or no-op actions, and transaction rollback.
 
-- Health endpoint behavior
-- Local frontend CORS access
-- User registration
-- Email normalization and duplicate detection
-- Argon2 password storage and verification
-- OAuth2 login
-- JWT authentication
-- Missing and malformed tokens
-- Disabled accounts
-- Viewer Incident permissions
-- Operator Incident permissions
-- Administrator Incident permissions
-- Administrator user management
-- Immediate role and status enforcement
-- Privilege-escalation prevention
-- Administrator self-lockout prevention
-- Incident validation and pagination
-- Missing User and Incident responses
-
-Tests replace the PostgreSQL dependency with SQLite in-memory storage.
-
-`StaticPool` keeps the database available across FastAPI test threads, while fixtures create and remove the schema around each test.
-
-PostgreSQL-specific behavior is additionally verified with:
-
-- Alembic migration execution
-- `alembic check`
-- Live registration and login
-- Live role changes
-- Live administrator access
+SQLite in-memory storage provides repeatable automated state. PostgreSQL-specific validation includes migration execution, `alembic check`, live route discovery, and manual create-update-delete audit verification.
 
 ### Frontend Validation
 
-The frontend suite contains 23 automated tests across five test files.
+The frontend suite contains **31 tests across nine test files**. Phase 6 adds dashboard and audit API tests, dashboard role and retry behavior, Incident filter application and clearing, and filtered empty-state coverage.
 
-Vitest uses jsdom as its browser environment. React Testing Library and User Event exercise rendered behavior through accessible controls, while Jest DOM provides browser-focused assertions.
-
-Frontend coverage includes:
-
-- Empty token-storage state
-- Saving, restoring, and removing an access token
-- Public-only route behavior
-- Signed-out protected-route redirects
-- Authenticated route rendering
-- Role-restricted route redirects
-- Registration request normalization
-- OAuth2 login-form construction
-- Current-user bearer authorization
-- Backend authentication error propagation
-- Incident list, detail, create, update, and delete requests
-- Incident query-string pagination
-- Incident payload trimming and field-name mapping
-- Viewer read-only Incident presentation
-- Operator creation and editing workflows
-- Administrator confirmed deletion
-- Recoverable Incident-list failures
-- Forward and backward Incident-page navigation
-- Shared mock and DOM cleanup between cases
-
-Incident workflow tests mock the browser `fetch` boundary. They verify UI-to-API behavior without modifying PostgreSQL development data.
-
-The Vite production build additionally validates imports, JSX transformation, CSS processing, and optimized bundle generation.
-
-Together, the backend and frontend suites provide 41 automated tests with:
-
-- Repeatable isolated state
-- HTTP-level authentication and authorization coverage
-- Frontend session, navigation, and Incident workflow coverage
-- No automated test records written to PostgreSQL
-- Reproducible local validation before commit
+The production Vite build validates imports, JSX transformation, CSS processing, and optimized bundle generation. Together, both suites provide **57 automated tests** without writing automated fixtures to the PostgreSQL development database.
 
 ## Frontend Design
 
-The frontend separates backend communication, authentication state, routing, reusable presentation, layouts, and page-level workflow coordination.
+The frontend separates API communication, authentication state, routing, reusable presentation, layouts, and page-level workflow coordination.
 
 | Area | Responsibility |
 |---|---|
-| `src/main.jsx` | Creates the React root and installs `BrowserRouter` and `AuthProvider` |
-| `src/App.jsx` | Defines public, protected, administrator, and fallback routes |
-| `src/api/client.js` | Sends shared API requests and normalizes unsuccessful responses |
-| `src/api/auth.js` | Registers users, requests tokens, and loads the current profile |
-| `src/api/auth.test.js` | Verifies authentication request construction and errors |
-| `src/api/health.js` | Requests backend health information |
-| `src/api/incidents.js` | Sends authenticated Incident CRUD and pagination requests |
-| `src/api/incidents.test.js` | Verifies Incident URLs, payload mapping, authorization, and responses |
-| `src/auth/AuthContext.jsx` | Owns session restoration, login, registration, logout, and retry actions |
-| `src/auth/token-storage.js` | Reads, writes, and removes the session-scoped access token |
-| `src/routes/ProtectedRoute.jsx` | Requires authentication and optional roles |
-| `src/routes/PublicOnlyRoute.jsx` | Redirects authenticated users away from public authentication pages |
-| `src/layouts/AuthLayout.jsx` | Presents shared registration and login branding |
-| `src/layouts/AppLayout.jsx` | Presents role-aware navigation and the authenticated workspace |
-| `src/components/RouteStatus.jsx` | Displays session loading and recoverable connection states |
-| `src/components/PageHeader.jsx` | Provides consistent authenticated page headings |
-| `src/components/IncidentList.jsx` | Renders selectable paginated Incident summaries |
-| `src/components/IncidentDetails.jsx` | Displays the selected Incident and permitted actions |
-| `src/components/IncidentForm.jsx` | Collects validated creation and editing fields |
-| `src/components/Modal.jsx` | Provides the shared accessible overlay container |
-| `src/components/IncidentDeleteDialog.jsx` | Requires explicit confirmation before deletion |
-| `src/pages/LoginPage.jsx` | Authenticates an existing user |
-| `src/pages/RegisterPage.jsx` | Creates and authenticates a viewer account |
-| `src/pages/DashboardPage.jsx` | Displays backend health and current-role information |
-| `src/pages/IncidentsPage.jsx` | Coordinates Incident loading, pagination, selection, and mutations |
-| `src/pages/IncidentsPage.test.jsx` | Verifies role-aware Incident workflows and failure recovery |
-| `src/pages/UsersPage.jsx` | Provides the administrator workspace placeholder |
-| `src/pages/ForbiddenPage.jsx` | Explains insufficient route access |
-| `src/pages/NotFoundPage.jsx` | Handles unmatched frontend locations |
-| `src/index.css` | Defines responsive authentication, application, Incident, form, and modal styling |
-| `src/test/setup.js` | Installs frontend assertions and resets test state |
+| `src/api/incidents.js` | Sends authenticated CRUD, pagination, and filter requests |
+| `src/api/dashboard.js` | Loads authenticated operational summary data |
+| `src/api/audit-events.js` | Loads paginated administrator audit history |
+| `src/components/IncidentFilters.jsx` | Owns accessible draft filter controls |
+| `src/pages/IncidentsPage.jsx` | Applies filters and coordinates the Incident workflow |
+| `src/pages/DashboardPage.jsx` | Coordinates metric and audit request states |
+| `src/pages/IncidentsPage.filters.test.jsx` | Verifies filter and empty-state behavior |
+| `src/pages/DashboardPage.test.jsx` | Verifies metrics, administrator visibility, and retry behavior |
+| `src/index.css` | Defines responsive dashboard, audit, filter, and workspace styling |
 
-### Incident Workspace Flow
+### Incident Query Flow
 
 ```mermaid
 flowchart TD
-    Page["Incident workspace"]
-    List["Paginated queue"]
-    Detail["Selected details"]
-    Form["Create or edit modal"]
-    Delete["Delete confirmation"]
-    API["Protected Incident API"]
+    Draft["Draft filter controls"]
+    Applied["Applied filters and page offset"]
+    API["Authenticated Incident query"]
+    Results["Queue or filtered empty state"]
 
-    Page --> List
-    List --> Detail
-    Page --> Form
-    Page --> Delete
-    Form --> API
-    Delete --> API
-    API --> Page
+    Draft -->|Apply or clear| Applied
+    Applied --> API
+    API --> Results
 ```
 
-| Role | Read and paginate | Create | Edit | Delete |
-|---|---:|---:|---:|---:|
-| Viewer | Yes | No | No | No |
-| Operator | Yes | Yes | Yes | No |
-| Administrator | Yes | Yes | Yes | Yes |
+Applying or clearing filters resets the offset to zero. Selection follows the returned result set, while role-specific mutation controls remain independent of filtering.
 
-`IncidentsPage` owns request state and selected-record state. A successful creation returns the workspace to the first page, an update replaces the matching list and detail records, and deletion reloads the active page. If deletion empties a later page, navigation returns to the preceding page.
+### Dashboard Flow
 
-Loading, empty, error, success, and busy states are rendered explicitly. Recoverable list failures expose a retry action, mutation errors remain with their active form or confirmation dialog, and the backend independently rejects unauthorized requests.
-
-### Session State
-
-```mermaid
-stateDiagram-v2
-    [*] --> Anonymous: No stored token
-    [*] --> Checking: Stored token
-    Checking --> Authenticated: Current profile succeeds
-    Checking --> Anonymous: Token rejected
-    Checking --> SessionError: Network failure
-    SessionError --> Checking: Retry
-    SessionError --> Anonymous: Sign out
-    Anonymous --> Authenticated: Login or registration
-    Authenticated --> Anonymous: Sign out
-```
-
-The frontend does not treat possession of a token as proof of authentication. A stored token must successfully load the current database-backed profile before protected content is rendered.
+Dashboard metrics and administrator audit history use independent request states. A metric failure can be retried without exposing audit content, and a non-administrator never requests the audit endpoint.
 
 ### Route Structure
 
@@ -601,8 +450,6 @@ The frontend does not treat possession of a token as proof of authentication. A 
 | `/users` | Administrator | Application layout |
 | `/forbidden` | Authenticated | Application layout |
 | Unmatched route | None | Not-found page |
-
-The responsive application layout uses a persistent sidebar on larger screens and adapts navigation, forms, dialogs, and the Incident workspace for smaller displays.
 
 ## Local Ports
 
@@ -621,14 +468,14 @@ Port 5434 avoids conflicts with default PostgreSQL installations and other portf
 | 1 | React frontend, FastAPI backend, health integration, and CORS | Complete |
 | 2 | PostgreSQL, SQLAlchemy, Alembic, layered Incident CRUD, and tests | Complete |
 | 3 | Argon2, JWT authentication, database-backed RBAC, and protected APIs | Complete |
-| 4 | React Router, shared API clients, authentication state, protected routes, responsive layouts, and frontend tests | Complete |
-| 5 | Role-aware Incident queue, details, CRUD modals, pagination, request states, and workflow tests | Complete |
+| 4 | React Router, API clients, authentication state, protected layouts, and frontend tests | Complete |
+| 5 | Role-aware Incident CRUD, pagination, request states, and workflow tests | Complete |
+| 6 | Dashboard aggregates, Incident filters, immutable audit history, and atomic audit transactions | Complete |
 
 ## Planned Architecture Evolution
 
 | Phase | Architecture Addition |
 |---|---|
-| 6 | Dashboard queries, filtering, metrics, and audit history |
 | 7 | Backend and frontend containers with Docker Compose networking |
 | 8 | Automated validation and deployment workflows through GitHub Actions |
 | 9 | Cloud hosting, production configuration, logging, and monitoring |
