@@ -2,15 +2,15 @@
 
 A cloud-ready full-stack application for monitoring services, managing operational incidents, and controlling access through authenticated user roles.
 
-This portfolio project demonstrates full-stack software engineering with React, React Router, FastAPI, PostgreSQL, SQLAlchemy, Alembic, Argon2 password hashing, JSON Web Tokens, role-based access control, responsive interface design, automated testing, and environment-based configuration.
+This portfolio project demonstrates full-stack software engineering with React, React Router, FastAPI, PostgreSQL, SQLAlchemy, Alembic, Argon2 password hashing, JSON Web Tokens, role-based access control, responsive interface design, multi-stage containers, Nginx reverse proxying, Docker Compose, automated testing, and environment-based configuration.
 
 ## Current Status
 
-**Phase 6 - Dashboard, Filtering, and Audit History: Complete**
+**Phase 7 - Docker and Local Service Integration: Complete**
 
-The application now provides live operational dashboard metrics, Incident search and filtering, and immutable administrator-only audit history. Incident and user mutations record safe actor snapshots and field-level change metadata in the same database transaction as the business operation.
+The complete application now runs as a coordinated Docker Compose stack with PostgreSQL, a one-shot Alembic migration service, a non-root FastAPI container, and an unprivileged Nginx container serving the production React build and proxying backend routes.
 
-Phase 6 is covered by 57 automated tests across the backend and frontend, production frontend build validation, Alembic schema validation, and manual role-aware browser verification.
+Compose startup is gated by database, migration, backend, and frontend health conditions. The stack uses an internal data network, a separate edge network, loopback-only host ports, persistent PostgreSQL storage, and required secret interpolation. Phase 7 is covered by 58 automated tests plus image, migration, persistence, authorization, audit, proxy, SPA fallback, security-header, and live HTTP validation.
 
 ## Current Features
 
@@ -42,7 +42,16 @@ Phase 6 is covered by 57 automated tests across the backend and frontend, produc
 - Database-backed role and active-account enforcement
 - Administrator user, role, and account-status management
 - Administrator self-lockout protection
-- Interactive Swagger API documentation
+- Secure, idempotent administrator bootstrap with audited role changes
+- Four-service Docker Compose application stack
+- Health-gated one-shot Alembic migration service
+- Multi-stage backend and frontend container images
+- Dedicated non-root runtime users
+- Unprivileged Nginx production frontend and reverse proxy
+- SPA fallback, immutable asset caching, and response security headers
+- Internal database network and loopback-only published host ports
+- Persistent named PostgreSQL volume
+- Interactive Swagger API documentation through the frontend proxy
 - Isolated backend and frontend automated tests
 - Reproducible Python and Node dependencies
 - Production frontend build command
@@ -77,18 +86,21 @@ Phase 6 is covered by 57 automated tests across the backend and frontend, produc
 - Email Validator
 - Python Multipart
 - Pytest
-- HTTPX2
+- HTTPX
 
-### Database and Development Infrastructure
+### Database and Container Infrastructure
 
-- PostgreSQL 18
-- Docker
+- PostgreSQL 18 Alpine
+- Docker and Docker Compose
+- Multi-stage Docker builds
+- Nginx Unprivileged 1.30 Alpine
+- Docker health checks, dependency conditions, and named volumes
+- Isolated Compose edge and internal data networks
 - SQLite in-memory test database
 - Environment variables through `.env`
 
 ### Planned Infrastructure
 
-- Docker Compose application networking
 - GitHub Actions
 - Cloud deployment
 - Centralized logging
@@ -110,67 +122,41 @@ cloud-deployed-full-stack-system/
 |   |   |-- core/
 |   |   |-- db/
 |   |   |-- models/
-|   |   |   |-- audit_event.py
-|   |   |   |-- incident.py
-|   |   |   `-- user.py
 |   |   |-- repositories/
-|   |   |   |-- audit_events.py
-|   |   |   |-- dashboard.py
-|   |   |   |-- incidents.py
-|   |   |   `-- users.py
 |   |   |-- schemas/
-|   |   |   |-- audit_event.py
-|   |   |   |-- dashboard.py
-|   |   |   |-- incident.py
-|   |   |   `-- user.py
 |   |   |-- services/
-|   |   |   |-- audit_events.py
-|   |   |   |-- auth.py
-|   |   |   |-- dashboard.py
-|   |   |   `-- incidents.py
 |   |   `-- main.py
 |   |-- migrations/versions/
-|   |   |-- 2ef9cb82e708_create_incidents_table.py
-|   |   |-- 6b0140f7a01f_create_users_table.py
-|   |   `-- 7c9e4b2a6d10_create_audit_events_table.py
-|   `-- tests/
-|       |-- test_audit_events.py
-|       |-- test_auth.py
-|       |-- test_dashboard.py
-|       |-- test_health.py
-|       |-- test_incident_filters.py
-|       |-- test_incidents.py
-|       `-- test_users.py
-|-- docs/architecture.md
+|   |-- tests/
+|   |   |-- test_audit_events.py
+|   |   |-- test_auth.py
+|   |   |-- test_bootstrap_admin.py
+|   |   |-- test_dashboard.py
+|   |   |-- test_health.py
+|   |   |-- test_incident_filters.py
+|   |   |-- test_incidents.py
+|   |   `-- test_users.py
+|   |-- .dockerignore
+|   `-- Dockerfile
+|-- docs/
+|   `-- architecture.md
 |-- frontend/
-|   `-- src/
-|       |-- api/
-|       |   |-- audit-events.js
-|       |   |-- audit-events.test.js
-|       |   |-- dashboard.js
-|       |   |-- dashboard.test.js
-|       |   |-- incidents.js
-|       |   `-- incidents.test.js
-|       |-- auth/
-|       |-- components/
-|       |   |-- IncidentFilters.jsx
-|       |   |-- IncidentList.jsx
-|       |   |-- IncidentDetails.jsx
-|       |   |-- IncidentForm.jsx
-|       |   `-- IncidentDeleteDialog.jsx
-|       |-- layouts/
-|       |-- pages/
-|       |   |-- DashboardPage.jsx
-|       |   |-- DashboardPage.test.jsx
-|       |   |-- IncidentsPage.jsx
-|       |   |-- IncidentsPage.test.jsx
-|       |   `-- IncidentsPage.filters.test.jsx
-|       |-- routes/
-|       |-- App.jsx
-|       |-- index.css
-|       `-- main.jsx
+|   |-- src/
+|   |   |-- api/
+|   |   |-- auth/
+|   |   |-- components/
+|   |   |-- layouts/
+|   |   |-- pages/
+|   |   |-- routes/
+|   |   |-- App.jsx
+|   |   |-- index.css
+|   |   `-- main.jsx
+|   |-- .dockerignore
+|   |-- Dockerfile
+|   `-- nginx.conf
 |-- .env.example
 |-- .gitignore
+|-- compose.yaml
 `-- README.md
 ```
 
@@ -182,26 +168,26 @@ Create a private local environment file from the provided template:
 Copy-Item .env.example .env
 ```
 
-The real `.env` file is excluded from Git and must never be committed.
-
-The application uses these variables:
+The real `.env` file is excluded from Git and must never be committed. Replace the sample database password and JWT secret before starting the Compose stack.
 
 | Variable | Purpose |
 |---|---|
 | `APP_ENV` | Selects the application runtime environment |
-| `BACKEND_HOST` | Defines the local backend host |
-| `BACKEND_PORT` | Defines the local backend port |
-| `VITE_API_BASE_URL` | Points the frontend to the backend API |
+| `BACKEND_HOST` | Defines the manually run backend host |
+| `BACKEND_PORT` | Defines the manually run backend port |
+| `VITE_API_BASE_URL` | Points a manually run Vite frontend to the backend API |
 | `POSTGRES_DB` | Defines the PostgreSQL database name |
-| `POSTGRES_USER` | Defines the PostgreSQL development user |
-| `POSTGRES_PASSWORD` | Defines the local database password |
-| `POSTGRES_PORT` | Exposes PostgreSQL on local port 5434 |
-| `DATABASE_URL` | Provides the SQLAlchemy database connection URL |
-| `JWT_SECRET_KEY` | Signs and validates access tokens |
+| `POSTGRES_USER` | Defines the PostgreSQL user |
+| `POSTGRES_PASSWORD` | Supplies the required database password |
+| `POSTGRES_PORT` | Exposes PostgreSQL for manual local development |
+| `DATABASE_URL` | Provides the manual SQLAlchemy database connection URL |
+| `JWT_SECRET_KEY` | Supplies the required token-signing secret |
 | `JWT_ALGORITHM` | Selects the permitted JWT signing algorithm |
 | `ACCESS_TOKEN_EXPIRE_MINUTES` | Controls access-token lifetime |
 | `JWT_ISSUER` | Identifies the service issuing tokens |
 | `JWT_AUDIENCE` | Identifies the intended token consumer |
+| `COMPOSE_FRONTEND_PORT` | Publishes Nginx to loopback; defaults to `8080` |
+| `COMPOSE_BACKEND_PORT` | Publishes FastAPI to loopback; defaults to `8001` |
 
 Generate a private random JWT secret after creating `.env`:
 
@@ -224,7 +210,43 @@ Remove-Variable jwtSecret, secretBytes
 
 Do not print or commit the generated secret.
 
-## Local Development
+## Docker Compose
+
+Docker Compose is the primary full-stack runtime. From the project root, create `.env`, replace its sample secrets, and then validate and start the stack:
+
+```powershell
+docker compose config --quiet
+docker compose up --build -d
+docker compose ps
+```
+
+The services start in dependency order:
+
+1. PostgreSQL starts and passes `pg_isready`.
+2. The one-shot migration service applies `alembic upgrade head` and exits successfully.
+3. FastAPI starts only after PostgreSQL is healthy and migration completes.
+4. Nginx starts after the backend is healthy.
+
+Open the production application at `http://127.0.0.1:8080`. Swagger documentation is proxied at `http://127.0.0.1:8080/docs`, and the backend health endpoint is also available directly at `http://127.0.0.1:8001/health`.
+
+Create or promote an administrator without placing a password in shell history:
+
+```powershell
+docker compose exec backend python -m app.cli.bootstrap_admin `
+    --email "admin@example.com" `
+    --full-name "Cloud Operations Administrator"
+```
+
+Useful lifecycle commands:
+
+```powershell
+docker compose logs --follow
+docker compose down
+```
+
+`docker compose down` preserves the named PostgreSQL volume. Use `docker compose down --volumes` only when intentionally deleting local database data.
+
+## Manual Local Development
 
 ### 1. Start PostgreSQL
 
@@ -366,6 +388,8 @@ npm run build
 
 Vite writes the generated application to `frontend/dist`. The directory is excluded from Git because it is reproducible from the committed source and dependency lock file.
 
+The frontend Dockerfile performs the same build with `npm ci` in a Node stage, then copies only `dist` into an unprivileged Nginx runtime image. Nginx serves browser-managed routes through an SPA fallback, proxies API and documentation routes to FastAPI, disables caching for the application entry point, and applies long-lived immutable caching to fingerprinted assets.
+
 ## Frontend Authentication Workflow
 
 The frontend stores its access token in browser `sessionStorage`. The token is therefore shared only within the current browser tab and is removed when the tab session ends or the user signs out.
@@ -479,9 +503,9 @@ cd backend
 .\.venv\Scripts\python.exe -m pytest -v
 ```
 
-Current expected result: **26 passed**.
+Current expected result: **27 passed**.
 
-Coverage includes authentication, database-backed authorization, Incident CRUD and filters, dashboard aggregation, administrator-only audit access, mutation audit records, actor snapshots, field-level changes, transaction rollback, and suppression of failed or no-op audit events.
+Coverage includes authentication, database-backed authorization, Incident CRUD and filters, dashboard aggregation, administrator-only audit access, mutation audit records, actor snapshots, field-level changes, transaction rollback, suppression of failed or no-op audit events, and administrator-bootstrap actor integration.
 
 ### Frontend Tests
 
@@ -495,7 +519,7 @@ Current expected result: **9 test files and 31 tests passed**, followed by a suc
 
 Coverage includes session state, route guards, API clients, Incident role workflows, pagination, filters, filtered empty states, dashboard metrics, administrator audit presentation, and recoverable request failures.
 
-Together, the backend and frontend suites provide **57 automated tests**.
+Together, the backend and frontend suites provide **58 automated tests**. Phase 7 additionally validates Compose rendering, multi-stage image builds, non-root users, migration gating, named-volume persistence, live authorization and audit workflows, Nginx proxying and SPA fallback, health checks, security headers, and published host routes.
 
 ## API Endpoints
 
@@ -552,13 +576,19 @@ closed
 - Frontend route guards never replace backend authorization.
 - Dashboard data requires authentication; audit history requires administrator access.
 - Audit records are immutable through the application API.
-- Audit records retain safe actor and resource snapshots.
 - Audit metadata excludes passwords, password hashes, tokens, and secrets.
 - Business mutations and audit events commit or roll back atomically.
 - Failed and no-op mutations do not create misleading audit records.
+- Compose refuses to render without `POSTGRES_PASSWORD` and `JWT_SECRET_KEY`.
+- PostgreSQL is isolated on an internal network and has no published host port.
+- Published frontend and backend ports bind only to `127.0.0.1`.
+- Backend and frontend runtime images use dedicated non-root users.
+- FastAPI waits for both database health and successful migration completion.
+- Nginx sends `X-Content-Type-Options`, `X-Frame-Options`, and `Referrer-Policy` on pages, assets, and proxied responses.
+- Fingerprinted assets use immutable caching while the SPA entry point uses no-cache behavior.
 - Test credentials and databases are isolated from development data.
 
-Session storage does not protect a token from malicious JavaScript executing in the same page. Production deployment must maintain strict script controls and avoid unsafe HTML injection.
+Session storage does not protect a token from malicious JavaScript executing in the same page. Cloud deployment must use HTTPS, managed secrets, a restrictive Content Security Policy, and production-specific origin configuration.
 
 ## Development Roadmap
 
@@ -570,7 +600,7 @@ Session storage does not protect a token from malicious JavaScript executing in 
 | 4 | Frontend routing and application layout | Complete |
 | 5 | Incident management workflow | Complete |
 | 6 | Dashboard, filtering, and audit history | Complete |
-| 7 | Docker and local service integration | Planned |
+| 7 | Docker and local service integration | Complete |
 | 8 | Automated testing and CI/CD | Planned |
 | 9 | Cloud deployment and observability | Planned |
 

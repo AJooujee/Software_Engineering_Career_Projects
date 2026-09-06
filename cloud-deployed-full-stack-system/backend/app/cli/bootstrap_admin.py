@@ -1,4 +1,4 @@
-﻿"""Create or promote the initial Cloud Operations administrator."""
+"""Create or promote the initial Cloud Operations administrator."""
 
 import argparse
 from getpass import getpass
@@ -104,6 +104,8 @@ def main() -> int:
                 database_session,
                 user.id,
                 UserRole.ADMIN,
+                # Attribute the CLI-only mutation to the controlled account.
+                actor=user,
             )
 
         if not user.is_active:
@@ -111,6 +113,8 @@ def main() -> int:
                 database_session,
                 user.id,
                 is_active=True,
+                # Attribute the CLI-only mutation to the controlled account.
+                actor=user,
             )
 
         print(

@@ -2,47 +2,46 @@
 
 ## Overview
 
-Phase 6 extends the authenticated full-stack architecture with operational aggregation, server-side Incident filtering, and immutable audit history.
+Phase 7 packages the Phase 6 application into a health-gated Docker Compose topology. PostgreSQL, Alembic migration, FastAPI, and the production React frontend now run as coordinated services with explicit dependency conditions, isolated networks, persistent storage, and loopback-only host exposure.
 
-FastAPI remains the security and transaction boundary. Dashboard queries aggregate operational data without changing it. Incident and user mutations create their audit records inside the same SQLAlchemy transaction, preventing business state and audit history from diverging.
-
-The React frontend consumes dedicated Incident, dashboard, and audit API modules. Every authenticated role can view dashboard metrics, while only administrators can request and view audit history.
+FastAPI remains the authorization and transaction boundary. Dashboard queries are read-only, while Incident and user mutations use atomic audit transactions. Nginx serves the compiled single-page application and proxies API, health, and documentation requests across the Compose edge network.
 
 ## Current Architecture
 
 ```mermaid
 flowchart TD
-    Browser["React browser application"]
-    API["FastAPI routes and authorization"]
-    Services["Business and audit transactions"]
-    Repositories["Queries and staged writes"]
-    Database["PostgreSQL"]
+    Browser["Browser on loopback"]
+    Nginx["Nginx and React container"]
+    API["FastAPI container"]
+    Migration["One-shot Alembic migration"]
+    Database["PostgreSQL named volume"]
 
-    Browser -->|JWT API requests| API
-    API --> Services
-    Services --> Repositories
-    Repositories --> Database
-    Database -->|Incidents, metrics, audit events| Browser
+    Browser -->|HTTP 8080| Nginx
+    Nginx -->|Edge network| API
+    API -->|Internal data network| Database
+    Migration -->|Upgrade schema| Database
+    Migration -.->|Successful completion gates startup| API
 ```
 
-The dashboard path performs read-only aggregate queries. The mutation path stages the resource change and its audit event before one service-owned commit.
+Only Nginx and the optional direct backend route publish ports, both on `127.0.0.1`. PostgreSQL is reachable only on the internal data network. The frontend cannot join the data network, and the database cannot join the edge network.
+
+The runtime sequence is PostgreSQL health, migration exit code zero, backend health, then frontend health. This prevents application traffic from reaching a schema that has not been upgraded.
 
 ## Components
 
 | Component | Responsibility |
 |---|---|
+| Docker Compose | Builds images, injects runtime configuration, orders startup, and joins services to least-privilege networks |
+| PostgreSQL service | Persists users, Incidents, and audit events in a named volume |
+| Migration service | Runs `alembic upgrade head` once after PostgreSQL becomes healthy |
+| Backend container | Runs Uvicorn as UID and GID `10001:10001` after migration succeeds |
+| Frontend container | Runs unprivileged Nginx as user `101`, serves React, and proxies backend routes |
 | Application layout | Presents authenticated navigation, role details, and page content |
 | Dashboard page | Displays metrics, operational distributions, request states, and admin audit history |
 | Incident workspace | Coordinates filters, pagination, selection, mutations, and feedback |
-| Incident filters | Separates draft controls from applied API query values |
-| Frontend API modules | Send authenticated Incident, dashboard, and audit requests |
 | FastAPI dependencies | Validate bearer tokens and enforce database-backed roles |
-| Incident routes and service | Enforce permissions and coordinate Incident transactions |
-| Dashboard route and repository | Return authenticated read-only aggregate metrics |
-| Audit route and repository | Return administrator-only immutable history |
-| User service | Coordinates role or status mutations with audit events |
+| Services | Apply business rules and own transaction commit or rollback behavior |
 | SQLAlchemy repositories | Read records and stage writes without committing |
-| PostgreSQL | Persists users, Incidents, and audit events |
 | Alembic | Versions and applies database schema changes |
 | Pytest | Exercises backend behavior with isolated database state |
 | Vitest and Testing Library | Exercise frontend APIs and user-visible workflows |
@@ -50,35 +49,29 @@ The dashboard path performs read-only aggregate queries. The mutation path stage
 ## Backend Layered Design
 
 ```text
-backend/app/
-|-- api/
-|   |-- dependencies/
-|   |   `-- auth.py
-|   `-- routes/
-|       |-- auth.py
-|       |-- incidents.py
-|       `-- users.py
-|-- cli/
-|   `-- bootstrap_admin.py
-|-- core/
-|   |-- config.py
-|   `-- security.py
-|-- db/
-|   |-- base.py
-|   `-- session.py
-|-- models/
-|   |-- incident.py
-|   `-- user.py
-|-- repositories/
-|   |-- incidents.py
-|   `-- users.py
-|-- schemas/
-|   |-- incident.py
-|   `-- user.py
-|-- services/
-|   |-- auth.py
-|   `-- incidents.py
-`-- main.py
+backend/
+|-- app/
+|   |-- api/
+|   |   |-- dependencies/auth.py
+|   |   `-- routes/
+|   |       |-- audit_events.py
+|   |       |-- auth.py
+|   |       |-- dashboard.py
+|   |       |-- incidents.py
+|   |       `-- users.py
+|   |-- cli/bootstrap_admin.py
+|   |-- core/
+|   |-- db/
+|   |-- models/
+|   |-- repositories/
+|   |-- schemas/
+|   |-- services/
+|   `-- main.py
+|-- migrations/
+|-- tests/
+|   `-- test_bootstrap_admin.py
+|-- .dockerignore
+`-- Dockerfile
 ```
 
 | Layer | Responsibility |
@@ -88,11 +81,12 @@ backend/app/
 | Schema | Validates incoming data and controls public response fields |
 | Service | Applies business rules and owns commit or rollback behavior |
 | Repository | Reads records and stages database changes with `flush()` |
-| Model | Defines persistent User and Incident representations |
+| Model | Defines persistent User, Incident, and AuditEvent representations |
 | Database session | Provides one SQLAlchemy session per API request |
 | Core configuration | Loads database and JWT settings from environment variables |
 | Security utility | Performs Argon2 and JWT cryptographic operations |
-| CLI command | Creates or promotes the first administrator securely |
+| CLI command | Creates or promotes the first administrator securely and records audited role changes |
+| Dockerfile | Builds dependencies separately and runs only application artifacts as a non-root user |
 
 ## Authentication Design
 
@@ -196,21 +190,19 @@ Authenticated requests reload the current User from PostgreSQL. Role and account
 
 ## Administrator Bootstrap
 
-A new environment initially has no administrator.
-
-The `app.cli.bootstrap_admin` command provides a controlled bootstrap path:
+A new environment initially has no administrator. The `app.cli.bootstrap_admin` command provides a controlled bootstrap path:
 
 1. It searches for the normalized email.
 2. If the User exists, it promotes the account to `admin`.
 3. If the User does not exist, it securely prompts for a password.
 4. It validates the new User through the same Pydantic schema.
 5. It creates the User through the same service and repository layers.
-6. It assigns the administrator role.
+6. It supplies the affected User as the required audit actor when changing role or status.
 7. It reactivates the account when necessary.
 
-The password is not accepted as a command-line argument, preventing it from being stored in shell history.
+The password is not accepted as a command-line argument, preventing it from being stored in shell history. The command is idempotent, handles `Ctrl + C` without displaying a traceback, and works inside the backend container through `docker compose exec`.
 
-The command is idempotent and handles `Ctrl + C` without displaying a traceback.
+Bootstrap role and status mutations use the same service signatures as HTTP administration. The dedicated regression test verifies that `actor=user` remains present after authorization or audit-service changes.
 
 ## Transaction Management
 
@@ -338,74 +330,78 @@ Alembic reads the database URL from application settings and discovers models th
 | `6b0140f7a01f` | Creates the User table, role constraint, and indexes |
 | `7c9e4b2a6d10` | Creates the AuditEvent table and lookup indexes |
 
-Schema changes follow a reviewed model, revision, upgrade, and `alembic check` workflow.
+In Compose, migration is a one-shot service using the backend image. It waits for PostgreSQL health, runs `python -m alembic upgrade head`, and must exit successfully. The backend uses the `service_completed_successfully` dependency condition, so a failed migration blocks API startup instead of allowing a schema mismatch.
 
+Schema changes follow a reviewed model, revision, upgrade, `alembic current`, and `alembic check` workflow. Migration files are copied into the backend image and are available to both the migration and API services.
+
+## Container and Compose Architecture
+
+### Service Topology
+
+| Service | Image and runtime | Networks | Host exposure |
+|---|---|---|---|
+| `postgres` | `postgres:18-alpine` with named volume | Internal `data` | None |
+| `migration` | Backend image; one-shot Alembic command | Internal `data` | None |
+| `backend` | Python 3.12 slim; UID/GID `10001:10001` | `data`, `edge` | `127.0.0.1:8001` by default |
+| `frontend` | Nginx Unprivileged 1.30 Alpine; user `101` | `edge` | `127.0.0.1:8080` by default |
+
+The `data` network is declared `internal: true`. Only backend and migration workloads can reach PostgreSQL. The `edge` network connects Nginx to FastAPI without granting the frontend container direct database access.
+
+### Images and Build Context
+
+The backend Dockerfile separates dependency installation from its runtime stage, copies only Alembic and application files, compiles Python modules during build, and runs Uvicorn as a dedicated non-root identity. The frontend Dockerfile uses `npm ci` and Vite in its build stage, then copies only static output and Nginx configuration into the unprivileged runtime image. `.dockerignore` files exclude virtual environments, caches, test output, local dependencies, build output, and private environment files.
+
+### Persistence and Lifecycle
+
+The `postgres_data` named volume survives `docker compose down`, container recreation, and image rebuilds. `docker compose down --volumes` is intentionally destructive and removes local database state.
+
+Service health checks cover `pg_isready`, the backend `/health` endpoint, and the frontend HTTP entry point. Compose conditions make these checks part of startup correctness instead of informational status only.
+
+### Nginx Request Handling
+
+Nginx serves the compiled React application on port `8080`. `/api/`, `/health`, `/docs`, `/redoc`, and `/openapi.json` are proxied to `backend:8000`; other browser routes use `index.html` as the SPA fallback. Fingerprinted assets receive one-year immutable caching and the application entry point receives no-cache behavior.
+
+The server applies `X-Content-Type-Options: nosniff`, `X-Frame-Options: DENY`, and `Referrer-Policy: strict-origin-when-cross-origin`. Because location-specific cache headers normally replace inherited `add_header` values, Nginx 1.30 uses `add_header_inherit merge` to retain the security headers on pages, assets, and proxied responses.
 ## Configuration and Security
 
-Application configuration is documented in `.env.example`.
+Application configuration is documented in `.env.example`; the private `.env` file is excluded through `.gitignore`. Compose requires `POSTGRES_PASSWORD` and `JWT_SECRET_KEY` during interpolation, constructs the container-only database URL with the `postgres` service hostname, and supplies runtime settings without baking secrets into images.
 
-The private `.env` file is excluded through `.gitignore`. It contains:
+Backend controls include Argon2 password hashing, normalized email uniqueness, generic credential errors, strict JWT claim validation, database-backed roles and account status, administrator self-lockout protection, immutable audit history, and atomic audit transactions.
 
-- Local PostgreSQL credentials
-- SQLAlchemy database URL
-- JWT signing secret
-- Token algorithm and lifetime
-- Token issuer and audience
-- Frontend backend-API address
+Container controls include:
 
-The JWT secret is represented by Pydantic `SecretStr` to reduce accidental logging.
+- Required secret interpolation before Compose can render
+- Non-root backend and frontend runtime identities
+- An internal database network with no PostgreSQL host publication
+- Separate edge connectivity for Nginx and FastAPI
+- Loopback-only frontend and backend host bindings
+- Health-gated database, migration, backend, and frontend startup
+- Minimal runtime stages and restricted Docker build contexts
+- Persistent data isolated in a named volume
 
-Backend controls include:
+Frontend and proxy controls include session-scoped token storage, stored-token verification, rejected-token removal, role-aware controls, same-origin API proxying, SPA fallback, explicit cache policy, and Nginx response security headers.
 
-- Argon2 password hashing
-- Minimum password length validation
-- Normalized email uniqueness
-- Generic incorrect-credentials responses
-- Fixed JWT algorithm allowlist
-- Expiration, issuer, and audience validation
-- Database-backed roles and account status
-- Public-registration role restriction
-- Administrator self-lockout prevention
-- Isolated test credentials
-
-Frontend controls include:
-
-- Session-scoped token storage
-- Stored-token verification through `/api/auth/me`
-- Rejected-token removal after `401` or `403`
-- Safe internal return-path validation after login
-- Public-only and authenticated route guards
-- Administrator-only route presentation
-- Structured API and network error handling
-- Role-aware Incident mutation controls
-- Explicit confirmation before administrator deletion
-
-Frontend route restrictions do not replace backend authorization. Direct API requests are independently checked by FastAPI.
-
-CORS currently permits only:
-
-- `http://127.0.0.1:5173`
-- `http://localhost:5173`
-
-Production secrets, origins, and database URLs will be supplied through the deployment environment. Production deployment should also enforce HTTPS and a restrictive Content Security Policy.
+Local Vite development permits `http://127.0.0.1:5173` and `http://localhost:5173` through CORS. The Compose frontend uses same-origin proxy requests and does not require an additional browser origin. Cloud deployment must use HTTPS, managed secrets, production origin configuration, and a restrictive Content Security Policy.
 
 ## Testing Strategy
 
 ### Backend Validation
 
-The backend suite contains **26 integration tests**. In addition to health, authentication, authorization, and CRUD behavior, Phase 6 covers Incident filters, dashboard aggregates, admin-only audit access, change metadata, actor snapshots, failed or no-op actions, and transaction rollback.
+The backend suite contains **27 integration tests**. It covers health, authentication, database-backed authorization, CRUD behavior, Incident filters, dashboard aggregates, admin-only audit access, safe change metadata, actor snapshots, failed or no-op mutations, transaction rollback, and administrator-bootstrap audit-actor integration.
 
-SQLite in-memory storage provides repeatable automated state. PostgreSQL-specific validation includes migration execution, `alembic check`, live route discovery, and manual create-update-delete audit verification.
+SQLite in-memory storage provides repeatable automated state. PostgreSQL-specific validation includes migration execution, `alembic check`, named-volume persistence, bootstrap role changes, and live create-filter-dashboard-disable-audit workflows.
 
 ### Frontend Validation
 
-The frontend suite contains **31 tests across nine test files**. Phase 6 adds dashboard and audit API tests, dashboard role and retry behavior, Incident filter application and clearing, and filtered empty-state coverage.
+The frontend suite contains **31 tests across nine test files**. It covers session state, route guards, API clients, role-aware Incident workflows, pagination, dashboard and audit presentation, filter application and clearing, empty states, and recoverable errors.
 
-The production Vite build validates imports, JSX transformation, CSS processing, and optimized bundle generation. Together, both suites provide **57 automated tests** without writing automated fixtures to the PostgreSQL development database.
+The production Vite build validates imports, JSX transformation, CSS processing, and optimized bundle generation. Together, both suites provide **58 automated tests** without writing automated fixtures to the PostgreSQL development database.
+
+Phase 7 runtime validation additionally checks Compose rendering, image construction and runtime users, service health, migration completion, volume persistence, administrator bootstrap, authorization, audit history, dashboard integration, Nginx API proxying, SPA fallback, static assets, caching, security headers, and loopback host routes.
 
 ## Frontend Design
 
-The frontend separates API communication, authentication state, routing, reusable presentation, layouts, and page-level workflow coordination.
+The frontend separates API communication, authentication state, routing, reusable presentation, layouts, and page-level workflow coordination. Vite compiles this source into fingerprinted production assets; Nginx serves those assets and proxies backend traffic through one browser origin.
 
 | Area | Responsibility |
 |---|---|
@@ -418,6 +414,8 @@ The frontend separates API communication, authentication state, routing, reusabl
 | `src/pages/IncidentsPage.filters.test.jsx` | Verifies filter and empty-state behavior |
 | `src/pages/DashboardPage.test.jsx` | Verifies metrics, administrator visibility, and retry behavior |
 | `src/index.css` | Defines responsive dashboard, audit, filter, and workspace styling |
+| `frontend/Dockerfile` | Builds the Vite bundle and creates the unprivileged Nginx runtime |
+| `frontend/nginx.conf` | Defines proxy routes, SPA fallback, caching, health behavior, and security headers |
 
 ### Incident Query Flow
 
@@ -453,13 +451,16 @@ Dashboard metrics and administrator audit history use independent request states
 
 ## Local Ports
 
-| Service | Local Port | Container Port |
-|---|---:|---:|
-| React development server | 5173 | Not containerized |
-| FastAPI backend | 8000 | Not containerized |
-| PostgreSQL | 5434 | 5432 |
+| Runtime | Service | Host Port | Container Port |
+|---|---|---:|---:|
+| Docker Compose | Production frontend and reverse proxy | 8080 | 8080 |
+| Docker Compose | Direct backend diagnostics and documentation | 8001 | 8000 |
+| Docker Compose | PostgreSQL | Not published | 5432 |
+| Manual development | React development server | 5173 | Not containerized |
+| Manual development | FastAPI backend | 8000 | Not containerized |
+| Manual development | PostgreSQL | 5434 | 5432 |
 
-Port 5434 avoids conflicts with default PostgreSQL installations and other portfolio databases.
+Compose host ports can be changed with `COMPOSE_FRONTEND_PORT` and `COMPOSE_BACKEND_PORT`. Published ports bind to `127.0.0.1`; PostgreSQL remains internal. Manual port 5434 avoids conflicts with default PostgreSQL installations and other portfolio databases.
 
 ## Implemented Phases
 
@@ -471,11 +472,11 @@ Port 5434 avoids conflicts with default PostgreSQL installations and other portf
 | 4 | React Router, API clients, authentication state, protected layouts, and frontend tests | Complete |
 | 5 | Role-aware Incident CRUD, pagination, request states, and workflow tests | Complete |
 | 6 | Dashboard aggregates, Incident filters, immutable audit history, and atomic audit transactions | Complete |
+| 7 | Multi-stage containers, Compose networking, migration gating, persistence, and Nginx integration | Complete |
 
 ## Planned Architecture Evolution
 
 | Phase | Architecture Addition |
 |---|---|
-| 7 | Backend and frontend containers with Docker Compose networking |
 | 8 | Automated validation and deployment workflows through GitHub Actions |
 | 9 | Cloud hosting, production configuration, logging, and monitoring |
