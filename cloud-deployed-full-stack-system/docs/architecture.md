@@ -2,9 +2,9 @@
 
 ## Overview
 
-Phase 7 packages the Phase 6 application into a health-gated Docker Compose topology. PostgreSQL, Alembic migration, FastAPI, and the production React frontend now run as coordinated services with explicit dependency conditions, isolated networks, persistent storage, and loopback-only host exposure.
+Phase 8 adds a repository automation boundary around the Phase 7 containerized application. A path-scoped GitHub Actions workflow now validates backend behavior, frontend behavior, the migration graph, production builds, Compose startup, runtime identities, reverse-proxy behavior, and deployment readiness before code can progress to container delivery.
 
-FastAPI remains the authorization and transaction boundary. Dashboard queries are read-only, while Incident and user mutations use atomic audit transactions. Nginx serves the compiled single-page application and proxies API, health, and documentation requests across the Compose edge network.
+The runtime topology remains PostgreSQL, a one-shot Alembic migration, FastAPI, and an Nginx-served React application. FastAPI remains the authorization and transaction boundary; Nginx remains the browser-facing same-origin proxy. On successful direct pushes to `main`, the delivery job builds source-labeled backend and frontend images and publishes both immutable commit revisions and rolling main-branch references to GitHub Container Registry.
 
 ## Current Architecture
 
@@ -31,6 +31,9 @@ The runtime sequence is PostgreSQL health, migration exit code zero, backend hea
 
 | Component | Responsibility |
 |---|---|
+| GitHub Actions workflow | Runs project-scoped backend, frontend, Compose, and delivery gates |
+| CI smoke script | Uses the Python standard library to verify health, SPA fallback, assets, headers, caching, and required API paths |
+| GitHub Container Registry | Stores commit-addressable backend and frontend deployment images |
 | Docker Compose | Builds images, injects runtime configuration, orders startup, and joins services to least-privilege networks |
 | PostgreSQL service | Persists users, Incidents, and audit events in a named volume |
 | Migration service | Runs `alembic upgrade head` once after PostgreSQL becomes healthy |
@@ -362,6 +365,42 @@ Service health checks cover `pg_isready`, the backend `/health` endpoint, and th
 Nginx serves the compiled React application on port `8080`. `/api/`, `/health`, `/docs`, `/redoc`, and `/openapi.json` are proxied to `backend:8000`; other browser routes use `index.html` as the SPA fallback. Fingerprinted assets receive one-year immutable caching and the application entry point receives no-cache behavior.
 
 The server applies `X-Content-Type-Options: nosniff`, `X-Frame-Options: DENY`, and `Referrer-Policy: strict-origin-when-cross-origin`. Because location-specific cache headers normally replace inherited `add_header` values, Nginx 1.30 uses `add_header_inherit merge` to retain the security headers on pages, assets, and proxied responses.
+## CI/CD Architecture
+
+```mermaid
+flowchart TD
+    Change["Push, pull request, or manual dispatch"]
+    Backend["Backend validation"]
+    Frontend["Frontend validation"]
+    Compose["Compose integration gate"]
+    Registry["GHCR image delivery"]
+
+    Change --> Backend
+    Change --> Frontend
+    Backend --> Compose
+    Frontend --> Compose
+    Compose -->|Validated main push only| Registry
+```
+
+The workflow resides at `.github/workflows/cloud-operations-ci.yml` in the monorepo root. Its path filters include the complete cloud project and the workflow file itself. Pushes to `main` and `feature/**`, pull requests targeting `main`, and manual dispatches can run validation. A concurrency group based on workflow and Git ref cancels superseded runs on the same branch.
+
+### Validation Gates
+
+| Gate | Inputs and checks |
+|---|---|
+| Backend validation | Python 3.12, cached pinned requirements, source and test compilation, one Alembic head, and 27 Pytest cases |
+| Frontend validation | Node.js 24, npm lockfile cache, clean `npm ci`, 31 Vitest cases, Vite build, and output checks |
+| Compose integration | Four service images, healthy dependency order, migration exit zero, non-root runtime users, Alembic current revision, and HTTP smoke validation |
+| Image delivery | Backend and frontend image builds, OCI source and revision labels, GHCR login, and four published references |
+
+The Compose job uses an isolated project name, CI-only database and JWT values, and dedicated loopback ports. Diagnostic status and logs run even after failure, and `docker compose down --volumes --remove-orphans` always removes runner-local containers, networks, and data.
+
+### Delivery Contract
+
+Image delivery has an explicit `push` plus `refs/heads/main` condition and depends on all validation gates. The job alone receives `packages: write`; all other jobs retain `contents: read`. GitHub's job-scoped `GITHUB_TOKEN` authenticates to GHCR, so no long-lived registry credential is stored.
+
+Published package names are `cloud-operations-backend` and `cloud-operations-frontend` under the lowercase repository-owner namespace. Each successful main build publishes the immutable Git commit SHA and updates the rolling `main` tag. Phase 9 deployment should consume the SHA tag for reproducible releases and use the rolling tag only for discovery.
+
 ## Configuration and Security
 
 Application configuration is documented in `.env.example`; the private `.env` file is excluded through `.gitignore`. Compose requires `POSTGRES_PASSWORD` and `JWT_SECRET_KEY` during interpolation, constructs the container-only database URL with the `postgres` service hostname, and supplies runtime settings without baking secrets into images.
@@ -381,7 +420,19 @@ Container controls include:
 
 Frontend and proxy controls include session-scoped token storage, stored-token verification, rejected-token removal, role-aware controls, same-origin API proxying, SPA fallback, explicit cache policy, and Nginx response security headers.
 
-Local Vite development permits `http://127.0.0.1:5173` and `http://localhost:5173` through CORS. The Compose frontend uses same-origin proxy requests and does not require an additional browser origin. Cloud deployment must use HTTPS, managed secrets, production origin configuration, and a restrictive Content Security Policy.
+Automation controls include:
+
+- Repository content access defaults to read-only
+- Registry write access is isolated to the main-branch delivery job
+- Pull requests, feature pushes, and manual runs cannot publish images
+- CI database and JWT values exist only on the disposable runner
+- Backend and frontend validation must both pass before Compose starts
+- Compose must pass before registry delivery becomes eligible
+- Failure diagnostics do not expose private environment files
+- Runner-local containers, networks, and volumes are always removed
+- OCI labels bind published images to their source repository and revision
+
+Local Vite development permits `http://127.0.0.1:5173` and `http://localhost:5173` through CORS. The Compose frontend uses same-origin proxy requests and does not require an additional browser origin. Cloud deployment must use HTTPS, managed secrets, production origin configuration, a restrictive Content Security Policy, immutable SHA-tagged images, and environment-specific release approval.
 
 ## Testing Strategy
 
@@ -389,15 +440,19 @@ Local Vite development permits `http://127.0.0.1:5173` and `http://localhost:517
 
 The backend suite contains **27 integration tests**. It covers health, authentication, database-backed authorization, CRUD behavior, Incident filters, dashboard aggregates, admin-only audit access, safe change metadata, actor snapshots, failed or no-op mutations, transaction rollback, and administrator-bootstrap audit-actor integration.
 
-SQLite in-memory storage provides repeatable automated state. PostgreSQL-specific validation includes migration execution, `alembic check`, named-volume persistence, bootstrap role changes, and live create-filter-dashboard-disable-audit workflows.
+SQLite in-memory storage provides repeatable automated state. The backend CI gate installs pinned requirements, compiles source and tests, verifies a single Alembic head, and executes the complete suite without requiring a persistent database service.
 
 ### Frontend Validation
 
 The frontend suite contains **31 tests across nine test files**. It covers session state, route guards, API clients, role-aware Incident workflows, pagination, dashboard and audit presentation, filter application and clearing, empty states, and recoverable errors.
 
-The production Vite build validates imports, JSX transformation, CSS processing, and optimized bundle generation. Together, both suites provide **58 automated tests** without writing automated fixtures to the PostgreSQL development database.
+The frontend CI gate performs a clean lockfile installation, runs the complete suite, builds optimized Vite assets, and verifies the generated entry point and JavaScript bundle. Together, both suites provide **58 automated tests** without writing automated fixtures to PostgreSQL development data.
 
-Phase 7 runtime validation additionally checks Compose rendering, image construction and runtime users, service health, migration completion, volume persistence, administrator bootstrap, authorization, audit history, dashboard integration, Nginx API proxying, SPA fallback, static assets, caching, security headers, and loopback host routes.
+### Compose and Delivery Validation
+
+The Compose gate builds the backend and frontend images, creates a temporary PostgreSQL volume, applies all Alembic revisions, waits for backend and frontend health, checks migration exit zero, and confirms UID/GID `10001:10001` and user `101` runtime identities.
+
+The standard-library smoke script verifies direct and proxied health, React SPA fallback, JavaScript delivery, Nginx security headers, combined cache directives, and required OpenAPI routes. Only after this gate passes can a main-branch run enter image delivery. The feature-branch workflow was validated successfully on GitHub Actions before Phase 8 documentation completion.
 
 ## Frontend Design
 
@@ -473,10 +528,10 @@ Compose host ports can be changed with `COMPOSE_FRONTEND_PORT` and `COMPOSE_BACK
 | 5 | Role-aware Incident CRUD, pagination, request states, and workflow tests | Complete |
 | 6 | Dashboard aggregates, Incident filters, immutable audit history, and atomic audit transactions | Complete |
 | 7 | Multi-stage containers, Compose networking, migration gating, persistence, and Nginx integration | Complete |
+| 8 | Path-scoped validation gates and GHCR container delivery through GitHub Actions | Complete |
 
 ## Planned Architecture Evolution
 
 | Phase | Architecture Addition |
 |---|---|
-| 8 | Automated validation and deployment workflows through GitHub Actions |
 | 9 | Cloud hosting, production configuration, logging, and monitoring |
