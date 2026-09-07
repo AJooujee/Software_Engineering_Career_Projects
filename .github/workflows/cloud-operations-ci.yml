@@ -1,0 +1,254 @@
+name: Cloud Operations CI/CD
+
+on:
+  push:
+    branches:
+      - main
+      - "feature/**"
+    paths:
+      - "cloud-deployed-full-stack-system/**"
+      - ".github/workflows/cloud-operations-ci.yml"
+  pull_request:
+    branches:
+      - main
+    paths:
+      - "cloud-deployed-full-stack-system/**"
+      - ".github/workflows/cloud-operations-ci.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: cloud-operations-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  backend-validation:
+    name: Backend tests and migration graph
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    defaults:
+      run:
+        working-directory: cloud-deployed-full-stack-system/backend
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: cloud-deployed-full-stack-system/backend/requirements.txt
+
+      - name: Install backend dependencies
+        run: python -m pip install --requirement requirements.txt
+
+      - name: Compile backend source and tests
+        run: python -m compileall -q app tests
+
+      - name: Verify one Alembic head
+        run: |
+          head_count="$(python -m alembic heads | grep --count '(head)')"
+          test "$head_count" -eq 1
+
+      - name: Run backend tests
+        run: python -m pytest -v
+
+  frontend-validation:
+    name: Frontend tests and production build
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    defaults:
+      run:
+        working-directory: cloud-deployed-full-stack-system/frontend
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+
+      - name: Set up Node.js 24
+        uses: actions/setup-node@v7
+        with:
+          node-version: "24"
+          cache: npm
+          cache-dependency-path: cloud-deployed-full-stack-system/frontend/package-lock.json
+
+      - name: Install frontend dependencies
+        run: npm ci
+
+      - name: Run frontend tests
+        run: npm test
+
+      - name: Build production frontend
+        run: npm run build
+
+      - name: Verify production output
+        run: |
+          test -f dist/index.html
+          test -n "$(find dist/assets -maxdepth 1 -type f -name '*.js' -print -quit)"
+
+  compose-integration:
+    name: Compose end-to-end validation
+    needs:
+      - backend-validation
+      - frontend-validation
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    defaults:
+      run:
+        working-directory: cloud-deployed-full-stack-system
+
+    env:
+      COMPOSE_PROJECT_NAME: cloud-operations-ci-${{ github.run_id }}-${{ github.run_attempt }}
+      POSTGRES_DB: cloud_operations_ci
+      POSTGRES_USER: cloud_ops_ci
+      POSTGRES_PASSWORD: ci-only-postgres-password
+      JWT_SECRET_KEY: ci-only-jwt-secret-key-with-at-least-32-characters
+      JWT_ALGORITHM: HS256
+      ACCESS_TOKEN_EXPIRE_MINUTES: "30"
+      JWT_ISSUER: cloud-operations-api
+      JWT_AUDIENCE: cloud-operations-client
+      COMPOSE_BACKEND_PORT: "18001"
+      COMPOSE_FRONTEND_PORT: "18080"
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+
+      - name: Validate Docker Compose configuration
+        run: docker compose config --quiet
+
+      - name: Build service images
+        run: docker compose build --pull
+
+      - name: Start healthy Compose stack
+        run: >-
+          timeout 240s docker compose up
+          --detach
+          --wait
+          --wait-timeout 180
+
+      - name: Verify migration and runtime identities
+        run: |
+          migration_container="$(docker compose ps --all --quiet migration)"
+          test -n "$migration_container"
+
+          migration_state="$(
+            docker inspect \
+              --format '{{.State.Status}}:{{.State.ExitCode}}' \
+              "$migration_container"
+          )"
+          test "$migration_state" = "exited:0"
+
+          backend_user="$(
+            docker image inspect \
+              cloud-operations-backend:local \
+              --format '{{.Config.User}}'
+          )"
+          frontend_user="$(
+            docker image inspect \
+              cloud-operations-frontend:local \
+              --format '{{.Config.User}}'
+          )"
+
+          test "$backend_user" = "10001:10001"
+          test "$frontend_user" = "101"
+
+          docker compose exec -T backend \
+            python -m alembic current | grep --fixed-strings '(head)'
+
+      - name: Run production-stack smoke test
+        run: |
+          python scripts/ci_smoke.py \
+            --frontend-url http://127.0.0.1:18080 \
+            --backend-url http://127.0.0.1:18001
+
+      - name: Show Compose diagnostics
+        if: always()
+        run: |
+          docker compose ps --all
+          docker compose logs --no-color --tail 200
+
+      - name: Stop Compose stack
+        if: always()
+        run: docker compose down --volumes --remove-orphans
+
+  publish-images:
+    name: Publish deployment images to GHCR
+    needs:
+      - backend-validation
+      - frontend-validation
+      - compose-integration
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    permissions:
+      contents: read
+      packages: write
+
+    defaults:
+      run:
+        working-directory: cloud-deployed-full-stack-system
+
+    env:
+      REGISTRY: ghcr.io
+      GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+
+      - name: Log in to GitHub Container Registry
+        run: >-
+          printf '%s' "$GHCR_TOKEN" |
+          docker login "$REGISTRY"
+          --username "$GITHUB_ACTOR"
+          --password-stdin
+
+      - name: Build and publish immutable images
+        run: |
+          owner="$(
+            printf '%s' "$GITHUB_REPOSITORY_OWNER" |
+              tr '[:upper:]' '[:lower:]'
+          )"
+          source_url="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}"
+          backend_image="${REGISTRY}/${owner}/cloud-operations-backend"
+          frontend_image="${REGISTRY}/${owner}/cloud-operations-frontend"
+
+          docker build \
+            --file backend/Dockerfile \
+            --label "org.opencontainers.image.source=${source_url}" \
+            --label "org.opencontainers.image.revision=${GITHUB_SHA}" \
+            --tag "${backend_image}:${GITHUB_SHA}" \
+            --tag "${backend_image}:main" \
+            backend
+
+          docker build \
+            --file frontend/Dockerfile \
+            --build-arg VITE_API_BASE_URL=/ \
+            --label "org.opencontainers.image.source=${source_url}" \
+            --label "org.opencontainers.image.revision=${GITHUB_SHA}" \
+            --tag "${frontend_image}:${GITHUB_SHA}" \
+            --tag "${frontend_image}:main" \
+            frontend
+
+          docker push "${backend_image}:${GITHUB_SHA}"
+          docker push "${backend_image}:main"
+          docker push "${frontend_image}:${GITHUB_SHA}"
+          docker push "${frontend_image}:main"
+
+      - name: Log out of GitHub Container Registry
+        if: always()
+        run: docker logout "$REGISTRY"

@@ -2,15 +2,17 @@
 
 A cloud-ready full-stack application for monitoring services, managing operational incidents, and controlling access through authenticated user roles.
 
-This portfolio project demonstrates full-stack software engineering with React, React Router, FastAPI, PostgreSQL, SQLAlchemy, Alembic, Argon2 password hashing, JSON Web Tokens, role-based access control, responsive interface design, multi-stage containers, Nginx reverse proxying, Docker Compose, automated testing, and environment-based configuration.
+This portfolio project demonstrates full-stack software engineering with React, React Router, FastAPI, PostgreSQL, SQLAlchemy, Alembic, Argon2 password hashing, JSON Web Tokens, role-based access control, responsive interface design, multi-stage containers, Nginx reverse proxying, Docker Compose, GitHub Actions CI/CD, GitHub Container Registry delivery, automated testing, and environment-based configuration.
 
 ## Current Status
 
-**Phase 7 - Docker and Local Service Integration: Complete**
+**Phase 8 - Automated Testing and CI/CD: Complete**
 
-The complete application now runs as a coordinated Docker Compose stack with PostgreSQL, a one-shot Alembic migration service, a non-root FastAPI container, and an unprivileged Nginx container serving the production React build and proxying backend routes.
+The monorepo now includes a project-scoped GitHub Actions workflow for backend validation, frontend validation, production-like Docker Compose integration, and container-image delivery. Pushes to `main` and `feature/**`, pull requests targeting `main`, and manual dispatches run only when the cloud project or its workflow changes.
 
-Compose startup is gated by database, migration, backend, and frontend health conditions. The stack uses an internal data network, a separate edge network, loopback-only host ports, persistent PostgreSQL storage, and required secret interpolation. Phase 7 is covered by 58 automated tests plus image, migration, persistence, authorization, audit, proxy, SPA fallback, security-header, and live HTTP validation.
+Backend and frontend jobs run independently before the Compose gate. The integration job builds the four-service stack, requires successful migration completion and healthy services, verifies non-root image identities, and runs a standard-library smoke test against health, SPA fallback, static assets, security headers, caching, and required API routes. After all gates pass on a direct push to `main`, a least-privilege delivery job publishes backend and frontend images to GitHub Container Registry with immutable commit-SHA tags and rolling `main` tags.
+
+Phase 8 retains the 58 automated backend and frontend tests from Phase 7 and adds repeatable CI migration, image, runtime, proxy, and deployment-readiness validation. The feature-branch workflow has passed successfully on GitHub Actions; registry publishing remains intentionally restricted to the protected `main` delivery path.
 
 ## Current Features
 
@@ -52,6 +54,12 @@ Compose startup is gated by database, migration, backend, and frontend health co
 - Internal database network and loopback-only published host ports
 - Persistent named PostgreSQL volume
 - Interactive Swagger API documentation through the frontend proxy
+- Repository-scoped GitHub Actions triggers for the monorepo
+- Independent backend and frontend validation gates
+- Production-like Compose integration and smoke validation
+- Least-privilege GitHub Container Registry delivery from `main`
+- Commit-addressable and rolling container-image tags
+- Automatic cancellation of superseded branch runs
 - Isolated backend and frontend automated tests
 - Reproducible Python and Node dependencies
 - Production frontend build command
@@ -88,7 +96,7 @@ Compose startup is gated by database, migration, backend, and frontend health co
 - Pytest
 - HTTPX
 
-### Database and Container Infrastructure
+### Database, Container, and Delivery Infrastructure
 
 - PostgreSQL 18 Alpine
 - Docker and Docker Compose
@@ -96,12 +104,14 @@ Compose startup is gated by database, migration, backend, and frontend health co
 - Nginx Unprivileged 1.30 Alpine
 - Docker health checks, dependency conditions, and named volumes
 - Isolated Compose edge and internal data networks
+- GitHub Actions with monorepo path filters and concurrency control
+- GitHub Container Registry
+- Commit-SHA and rolling `main` image tags
 - SQLite in-memory test database
 - Environment variables through `.env`
 
 ### Planned Infrastructure
 
-- GitHub Actions
 - Cloud deployment
 - Centralized logging
 - Application monitoring
@@ -154,11 +164,15 @@ cloud-deployed-full-stack-system/
 |   |-- .dockerignore
 |   |-- Dockerfile
 |   `-- nginx.conf
+|-- scripts/
+|   `-- ci_smoke.py
 |-- .env.example
 |-- .gitignore
 |-- compose.yaml
 `-- README.md
 ```
+
+The monorepo-level workflow is stored at `../.github/workflows/cloud-operations-ci.yml`. Keeping it at the Git repository root allows GitHub Actions discovery while path filters isolate it from the other portfolio projects.
 
 ## Environment Configuration
 
@@ -519,7 +533,40 @@ Current expected result: **9 test files and 31 tests passed**, followed by a suc
 
 Coverage includes session state, route guards, API clients, Incident role workflows, pagination, filters, filtered empty states, dashboard metrics, administrator audit presentation, and recoverable request failures.
 
-Together, the backend and frontend suites provide **58 automated tests**. Phase 7 additionally validates Compose rendering, multi-stage image builds, non-root users, migration gating, named-volume persistence, live authorization and audit workflows, Nginx proxying and SPA fallback, health checks, security headers, and published host routes.
+Together, the backend and frontend suites provide **58 automated tests**. Phase 8 adds CI validation of the migration graph, reproducible dependency installation, production output, Compose rendering and image builds, migration exit state, non-root identities, service health, proxy behavior, SPA fallback, required API discovery, security headers, and immutable asset caching.
+
+## CI/CD Automation
+
+The repository-level `Cloud Operations CI/CD` workflow is path-scoped to `cloud-deployed-full-stack-system/**` and its own workflow file. Unrelated portfolio projects therefore do not start this pipeline.
+
+| Trigger | Validation behavior | Image publishing |
+|---|---|---|
+| Push to `feature/**` | Runs all validation gates | Skipped |
+| Pull request targeting `main` | Runs all validation gates | Skipped |
+| Manual dispatch | Runs all validation gates | Skipped |
+| Direct push or merged pull request on `main` | Runs all validation gates | Publishes after every gate passes |
+
+| Job | Responsibility |
+|---|---|
+| Backend tests and migration graph | Installs pinned Python dependencies, compiles source and tests, verifies one Alembic head, and runs 27 tests |
+| Frontend tests and production build | Uses `npm ci`, runs 31 tests, builds Vite output, and verifies the entry point and JavaScript bundle |
+| Compose end-to-end validation | Builds and starts the production-like stack, verifies migration and runtime identities, and runs `scripts/ci_smoke.py` |
+| Publish deployment images to GHCR | Authenticates with the job-scoped `GITHUB_TOKEN` and publishes only from `main` |
+
+The delivery job publishes:
+
+- `ghcr.io/ajooujee/cloud-operations-backend:<commit-sha>`
+- `ghcr.io/ajooujee/cloud-operations-backend:main`
+- `ghcr.io/ajooujee/cloud-operations-frontend:<commit-sha>`
+- `ghcr.io/ajooujee/cloud-operations-frontend:main`
+
+The commit-SHA tags provide immutable deployment references, while `main` identifies the latest validated main-branch build. Both images carry OCI source and revision labels. No personal access token or repository secret is required for registry authentication.
+
+Run the smoke test against the default local Compose ports with:
+
+```powershell
+.\backend\.venv\Scripts\python.exe scripts\ci_smoke.py
+```
 
 ## API Endpoints
 
@@ -587,8 +634,14 @@ closed
 - Nginx sends `X-Content-Type-Options`, `X-Frame-Options`, and `Referrer-Policy` on pages, assets, and proxied responses.
 - Fingerprinted assets use immutable caching while the SPA entry point uses no-cache behavior.
 - Test credentials and databases are isolated from development data.
+- GitHub Actions defaults to read-only repository contents.
+- Registry write access exists only in the `main` image-publishing job.
+- Pull requests and feature branches cannot execute the registry delivery path.
+- CI Compose credentials are disposable runner-local values, not production secrets.
+- Compose diagnostics run on failure and isolated CI volumes are always removed.
+- Published images include source-repository and commit-revision labels.
 
-Session storage does not protect a token from malicious JavaScript executing in the same page. Cloud deployment must use HTTPS, managed secrets, a restrictive Content Security Policy, and production-specific origin configuration.
+Session storage does not protect a token from malicious JavaScript executing in the same page. Cloud deployment must use HTTPS, managed secrets, a restrictive Content Security Policy, production-specific origin configuration, immutable image references, and environment-specific release approval.
 
 ## Development Roadmap
 
@@ -601,7 +654,7 @@ Session storage does not protect a token from malicious JavaScript executing in 
 | 5 | Incident management workflow | Complete |
 | 6 | Dashboard, filtering, and audit history | Complete |
 | 7 | Docker and local service integration | Complete |
-| 8 | Automated testing and CI/CD | Planned |
+| 8 | Automated testing and CI/CD | Complete |
 | 9 | Cloud deployment and observability | Planned |
 
 ## Author
