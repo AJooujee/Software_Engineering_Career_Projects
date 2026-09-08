@@ -2,11 +2,36 @@
 
 ## Overview
 
-Phase 8 adds a repository automation boundary around the Phase 7 containerized application. A path-scoped GitHub Actions workflow now validates backend behavior, frontend behavior, the migration graph, production builds, Compose startup, runtime identities, reverse-proxy behavior, and deployment readiness before code can progress to container delivery.
+Phase 9 deploys the validated Phase 8 container artifacts to Azure North Central US. Bicep modules provision a cost-controlled Azure Container Apps environment, public Nginx and React frontend, internal FastAPI backend, one-shot Alembic migration job, Azure Database for PostgreSQL Flexible Server, and Log Analytics workspace.
 
-The runtime topology remains PostgreSQL, a one-shot Alembic migration, FastAPI, and an Nginx-served React application. FastAPI remains the authorization and transaction boundary; Nginx remains the browser-facing same-origin proxy. On successful direct pushes to `main`, the delivery job builds source-labeled backend and frontend images and publishes both immutable commit revisions and rolling main-branch references to GitHub Container Registry.
+The delivery boundary remains explicit. GitHub Actions validates backend, frontend, Compose, proxy, and image behavior before publishing immutable GHCR commit-SHA images. Azure deployment is a separate manually approved operation that requires provider validation and an ARM what-if review. The production release uses commit `32ba84f1d310410fda315c9e348acc8fb0ab87d3`.
 
-## Current Architecture
+FastAPI remains the authorization and transaction boundary, while Nginx remains the browser-facing same-origin proxy. Production requests enter through HTTPS, the backend is internal to the Container Apps environment, and both application and platform logs flow into Log Analytics.
+
+## Runtime Topologies
+
+### Azure Production Architecture
+
+```mermaid
+flowchart TD
+    Browser["Browser over HTTPS"]
+    Frontend["External Nginx and React Container App"]
+    Backend["Internal FastAPI Container App"]
+    Migration["Alembic Container Apps Job"]
+    Database["PostgreSQL Flexible Server"]
+    Logs["Log Analytics"]
+
+    Browser --> Frontend
+    Frontend --> Backend
+    Backend --> Database
+    Migration --> Database
+    Backend --> Logs
+    Frontend --> Logs
+```
+
+The frontend is the only public application ingress. It serves the SPA and proxies API and documentation routes to the internal backend by Container Apps service discovery. The migration job uses the backend image but runs only when explicitly started. PostgreSQL requires TLS. Container Apps console and system logs are centralized in Log Analytics, and PostgreSQL server logs are exported through a diagnostic setting.
+
+### Local Compose Architecture
 
 ```mermaid
 flowchart TD
@@ -23,9 +48,7 @@ flowchart TD
     Migration -.->|Successful completion gates startup| API
 ```
 
-Only Nginx and the optional direct backend route publish ports, both on `127.0.0.1`. PostgreSQL is reachable only on the internal data network. The frontend cannot join the data network, and the database cannot join the edge network.
-
-The runtime sequence is PostgreSQL health, migration exit code zero, backend health, then frontend health. This prevents application traffic from reaching a schema that has not been upgraded.
+Only Nginx and the optional direct backend diagnostic route publish local ports, both on `127.0.0.1`. PostgreSQL is reachable only on the internal Compose data network. The local runtime sequence is PostgreSQL health, migration exit code zero, backend health, then frontend health.
 
 ## Components
 
@@ -34,6 +57,10 @@ The runtime sequence is PostgreSQL health, migration exit code zero, backend hea
 | GitHub Actions workflow | Runs project-scoped backend, frontend, Compose, and delivery gates |
 | CI smoke script | Uses the Python standard library to verify health, SPA fallback, assets, headers, caching, and required API paths |
 | GitHub Container Registry | Stores commit-addressable backend and frontend deployment images |
+| Bicep root and modules | Define the reviewed Azure monitoring, database, and Container Apps resources |
+| Azure Container Apps environment | Hosts the external frontend, internal backend, migration job, and centralized log integration |
+| PostgreSQL Flexible Server | Persists production users, Incidents, and audit events with TLS-required connectivity |
+| Log Analytics workspace | Retains centralized application, platform, and PostgreSQL diagnostic logs |
 | Docker Compose | Builds images, injects runtime configuration, orders startup, and joins services to least-privilege networks |
 | PostgreSQL service | Persists users, Incidents, and audit events in a named volume |
 | Migration service | Runs `alembic upgrade head` once after PostgreSQL becomes healthy |
@@ -64,6 +91,7 @@ backend/
 |   |       `-- users.py
 |   |-- cli/bootstrap_admin.py
 |   |-- core/
+|   |   `-- observability.py
 |   |-- db/
 |   |-- models/
 |   |-- repositories/
@@ -72,7 +100,8 @@ backend/
 |   `-- main.py
 |-- migrations/
 |-- tests/
-|   `-- test_bootstrap_admin.py
+|   |-- test_bootstrap_admin.py
+|   `-- test_observability.py
 |-- .dockerignore
 `-- Dockerfile
 ```
@@ -365,6 +394,39 @@ Service health checks cover `pg_isready`, the backend `/health` endpoint, and th
 Nginx serves the compiled React application on port `8080`. `/api/`, `/health`, `/docs`, `/redoc`, and `/openapi.json` are proxied to `backend:8000`; other browser routes use `index.html` as the SPA fallback. Fingerprinted assets receive one-year immutable caching and the application entry point receives no-cache behavior.
 
 The server applies `X-Content-Type-Options: nosniff`, `X-Frame-Options: DENY`, and `Referrer-Policy: strict-origin-when-cross-origin`. Because location-specific cache headers normally replace inherited `add_header` values, Nginx 1.30 uses `add_header_inherit merge` to retain the security headers on pages, assets, and proxied responses.
+## Azure Production Architecture
+
+The resource-group deployment is divided into three Bicep modules:
+
+| Module | Resources and responsibility |
+|---|---|
+| `monitoring.bicep` | Creates the Log Analytics workspace with 30-day retention and a 1 GB daily cap |
+| `database.bicep` | Creates PostgreSQL Flexible Server 18, 32 GB storage, seven-day backup retention, TLS enforcement, and diagnostic export |
+| `container-apps.bicep` | Creates the Container Apps environment, external frontend, internal backend, runtime secrets, and manually started migration job |
+
+The cost-first portfolio profile uses the Container Apps consumption plan with each web app limited to zero-to-one replicas. It intentionally omits a customer-managed VNet to avoid the additional load-balancer and public-IP cost. PostgreSQL therefore uses a public endpoint with mandatory TLS and an Azure-services firewall rule. This rule broadens the network boundary to Azure-assigned source addresses; database credentials and TLS remain required.
+
+Resource names include a deterministic deployment token derived by Bicep. The production resource group is `rg-cloud-operations-portfolio-northcentralus`, and the public entry point is `frontend-bdo5hkkvipb3s`. The backend `backend-bdo5hkkvipb3s` is reachable only through internal Container Apps ingress.
+
+### Production Release Sequence
+
+1. GitHub Actions validates source and publishes immutable commit-SHA images.
+2. Azure providers and regional capabilities are checked without creating application services.
+3. ARM provider validation compiles the deployment against Azure.
+4. ARM what-if is reviewed for the expected creates and zero deletes.
+5. A typed approval authorizes infrastructure creation.
+6. The migration job is started separately and must succeed.
+7. The first administrator is created or promoted inside the backend container.
+8. The public stack is smoke-tested through both direct and proxied health routes.
+9. Log Analytics is queried for structured requests and application or platform errors.
+
+This sequence keeps schema migration and administrator bootstrap out of automatic infrastructure provisioning. A failed or unreviewed deployment cannot silently create an administrator or mutate the database schema.
+
+### Production Observability
+
+FastAPI emits structured JSON request events and accepts or creates one safe `X-Request-ID` per response. Query-string values are excluded from the structured event. Nginx propagates request correlation and emits access and error logs. Container Apps sends application console logs and Azure system logs to Log Analytics.
+
+The completed production observation window recorded 192 structured backend requests, zero application error-like records for both apps, and zero Azure system errors for both apps. Platform warning records were limited to expected lifecycle behavior such as cold-start readiness and scale-to-zero activity.
 ## CI/CD Architecture
 
 ```mermaid
@@ -388,7 +450,7 @@ The workflow resides at `.github/workflows/cloud-operations-ci.yml` in the monor
 
 | Gate | Inputs and checks |
 |---|---|
-| Backend validation | Python 3.12, cached pinned requirements, source and test compilation, one Alembic head, and 27 Pytest cases |
+| Backend validation | Python 3.12, cached pinned requirements, source and test compilation, one Alembic head, and the complete Pytest suite |
 | Frontend validation | Node.js 24, npm lockfile cache, clean `npm ci`, 31 Vitest cases, Vite build, and output checks |
 | Compose integration | Four service images, healthy dependency order, migration exit zero, non-root runtime users, Alembic current revision, and HTTP smoke validation |
 | Image delivery | Backend and frontend image builds, OCI source and revision labels, GHCR login, and four published references |
@@ -399,7 +461,7 @@ The Compose job uses an isolated project name, CI-only database and JWT values, 
 
 Image delivery has an explicit `push` plus `refs/heads/main` condition and depends on all validation gates. The job alone receives `packages: write`; all other jobs retain `contents: read`. GitHub's job-scoped `GITHUB_TOKEN` authenticates to GHCR, so no long-lived registry credential is stored.
 
-Published package names are `cloud-operations-backend` and `cloud-operations-frontend` under the lowercase repository-owner namespace. Each successful main build publishes the immutable Git commit SHA and updates the rolling `main` tag. Phase 9 deployment should consume the SHA tag for reproducible releases and use the rolling tag only for discovery.
+Published package names are `cloud-operations-backend` and `cloud-operations-frontend` under the lowercase repository-owner namespace. Each successful main build publishes the immutable Git commit SHA and updates the rolling `main` tag. The Phase 9 production deployment consumes the immutable SHA tag for release reproducibility; the rolling tag is used only for discovery.
 
 ## Configuration and Security
 
@@ -432,13 +494,13 @@ Automation controls include:
 - Runner-local containers, networks, and volumes are always removed
 - OCI labels bind published images to their source repository and revision
 
-Local Vite development permits `http://127.0.0.1:5173` and `http://localhost:5173` through CORS. The Compose frontend uses same-origin proxy requests and does not require an additional browser origin. Cloud deployment must use HTTPS, managed secrets, production origin configuration, a restrictive Content Security Policy, immutable SHA-tagged images, and environment-specific release approval.
+Local Vite development permits `http://127.0.0.1:5173` and `http://localhost:5173` through CORS. The Compose and Azure frontends use same-origin proxy requests and do not require an additional browser origin. The Azure release uses HTTPS ingress, Container Apps secrets, production origin configuration, a restrictive Content Security Policy, immutable SHA-tagged images, and an explicit environment-specific approval.
 
 ## Testing Strategy
 
 ### Backend Validation
 
-The backend suite contains **27 integration tests**. It covers health, authentication, database-backed authorization, CRUD behavior, Incident filters, dashboard aggregates, admin-only audit access, safe change metadata, actor snapshots, failed or no-op mutations, transaction rollback, and administrator-bootstrap audit-actor integration.
+The backend suite covers health, authentication, database-backed authorization, CRUD behavior, Incident filters, dashboard aggregates, admin-only audit access, safe change metadata, actor snapshots, failed or no-op mutations, transaction rollback, administrator bootstrap, request IDs, structured JSON logging, and exclusion of sensitive query values.
 
 SQLite in-memory storage provides repeatable automated state. The backend CI gate installs pinned requirements, compiles source and tests, verifies a single Alembic head, and executes the complete suite without requiring a persistent database service.
 
@@ -446,13 +508,13 @@ SQLite in-memory storage provides repeatable automated state. The backend CI gat
 
 The frontend suite contains **31 tests across nine test files**. It covers session state, route guards, API clients, role-aware Incident workflows, pagination, dashboard and audit presentation, filter application and clearing, empty states, and recoverable errors.
 
-The frontend CI gate performs a clean lockfile installation, runs the complete suite, builds optimized Vite assets, and verifies the generated entry point and JavaScript bundle. Together, both suites provide **58 automated tests** without writing automated fixtures to PostgreSQL development data.
+The frontend CI gate performs a clean lockfile installation, runs the complete suite, builds optimized Vite assets, and verifies the generated entry point and JavaScript bundle. Automated fixtures never write to PostgreSQL development or production data.
 
 ### Compose and Delivery Validation
 
 The Compose gate builds the backend and frontend images, creates a temporary PostgreSQL volume, applies all Alembic revisions, waits for backend and frontend health, checks migration exit zero, and confirms UID/GID `10001:10001` and user `101` runtime identities.
 
-The standard-library smoke script verifies direct and proxied health, React SPA fallback, JavaScript delivery, Nginx security headers, combined cache directives, and required OpenAPI routes. Only after this gate passes can a main-branch run enter image delivery. The feature-branch workflow was validated successfully on GitHub Actions before Phase 8 documentation completion.
+The standard-library smoke script verifies direct and proxied health, database readiness, request correlation, React SPA fallback, JavaScript delivery, Nginx security headers, combined cache directives, and required OpenAPI routes. Only after this gate passes can a main-branch run enter image delivery. The same smoke contract passed against the Azure production stack after migration and administrator bootstrap.
 
 ## Frontend Design
 
@@ -529,9 +591,4 @@ Compose host ports can be changed with `COMPOSE_FRONTEND_PORT` and `COMPOSE_BACK
 | 6 | Dashboard aggregates, Incident filters, immutable audit history, and atomic audit transactions | Complete |
 | 7 | Multi-stage containers, Compose networking, migration gating, persistence, and Nginx integration | Complete |
 | 8 | Path-scoped validation gates and GHCR container delivery through GitHub Actions | Complete |
-
-## Planned Architecture Evolution
-
-| Phase | Architecture Addition |
-|---|---|
-| 9 | Cloud hosting, production configuration, logging, and monitoring |
+| 9 | Bicep infrastructure, Azure production hosting, migration job, centralized logs, and validated observability | Complete |
