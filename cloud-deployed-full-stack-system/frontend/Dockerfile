@@ -20,7 +20,10 @@ RUN npm run build
 # Serve only the compiled application through an unprivileged Nginx process.
 FROM nginxinc/nginx-unprivileged:1.30-alpine AS runtime
 
-COPY nginx.conf /etc/nginx/conf.d/default.conf
+ENV BACKEND_UPSTREAM=backend:8000 \
+    NGINX_ENVSUBST_FILTER=BACKEND_UPSTREAM
+
+COPY nginx.conf /etc/nginx/templates/default.conf.template
 COPY --from=build /workspace/frontend/dist /usr/share/nginx/html
 
 EXPOSE 8080
