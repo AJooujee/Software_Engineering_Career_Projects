@@ -2,17 +2,19 @@
 
 A cloud-ready full-stack application for monitoring services, managing operational incidents, and controlling access through authenticated user roles.
 
-This portfolio project demonstrates full-stack software engineering with React, React Router, FastAPI, PostgreSQL, SQLAlchemy, Alembic, Argon2 password hashing, JSON Web Tokens, role-based access control, responsive interface design, multi-stage containers, Nginx reverse proxying, Docker Compose, GitHub Actions CI/CD, GitHub Container Registry delivery, automated testing, and environment-based configuration.
+This portfolio project demonstrates full-stack software engineering with React, React Router, FastAPI, PostgreSQL, SQLAlchemy, Alembic, Argon2 password hashing, JSON Web Tokens, role-based access control, responsive interface design, multi-stage containers, Nginx reverse proxying, Docker Compose, GitHub Actions CI/CD, GitHub Container Registry delivery, Azure Container Apps, Azure Database for PostgreSQL, Bicep infrastructure as code, centralized logging, automated testing, and environment-based configuration.
 
 ## Current Status
 
-**Phase 8 - Automated Testing and CI/CD: Complete**
+**Phase 9 - Cloud Deployment and Observability: Complete**
 
-The monorepo now includes a project-scoped GitHub Actions workflow for backend validation, frontend validation, production-like Docker Compose integration, and container-image delivery. Pushes to `main` and `feature/**`, pull requests targeting `main`, and manual dispatches run only when the cloud project or its workflow changes.
+The production stack is deployed in Azure North Central US from immutable images built at commit `32ba84f1d310410fda315c9e348acc8fb0ab87d3`. The public frontend uses Azure Container Apps HTTPS ingress and proxies same-origin API traffic to an internal FastAPI Container App backed by Azure Database for PostgreSQL Flexible Server.
 
-Backend and frontend jobs run independently before the Compose gate. The integration job builds the four-service stack, requires successful migration completion and healthy services, verifies non-root image identities, and runs a standard-library smoke test against health, SPA fallback, static assets, security headers, caching, and required API routes. After all gates pass on a direct push to `main`, a least-privilege delivery job publishes backend and frontend images to GitHub Container Registry with immutable commit-SHA tags and rolling `main` tags.
+**Live application:** [Cloud Operations Platform](https://frontend-bdo5hkkvipb3s.victoriousforest-190ae510.northcentralus.azurecontainerapps.io)
 
-Phase 8 retains the 58 automated backend and frontend tests from Phase 7 and adds repeatable CI migration, image, runtime, proxy, and deployment-readiness validation. The feature-branch workflow has passed successfully on GitHub Actions; registry publishing remains intentionally restricted to the protected `main` delivery path.
+The release used a provider validation and fresh ARM what-if before deployment. The what-if predicted nine creates and zero deletes. Infrastructure provisioning, the one-shot Alembic migration, administrator bootstrap, authenticated UI verification, production-stack smoke validation, and centralized-log validation all completed successfully.
+
+Log Analytics receives Container Apps console and system logs. The production validation window recorded 192 structured backend request events with zero application error-like records and zero Azure system errors for either application. The deployment is a cost-controlled portfolio environment and availability is best-effort.
 
 ## Current Features
 
@@ -63,6 +65,13 @@ Phase 8 retains the 58 automated backend and frontend tests from Phase 7 and add
 - Isolated backend and frontend automated tests
 - Reproducible Python and Node dependencies
 - Production frontend build command
+- Modular Bicep infrastructure for monitoring, database, and Container Apps
+- Azure Container Apps consumption deployment with scale-to-zero web workloads
+- Azure Database for PostgreSQL Flexible Server with TLS
+- One-shot Azure Container Apps migration job
+- Centralized application and platform logs in Log Analytics
+- Structured JSON request logs with safe request correlation
+- Production liveness, readiness, proxy, asset, header, and log validation
 
 ## Technology Stack
 
@@ -96,9 +105,9 @@ Phase 8 retains the 58 automated backend and frontend tests from Phase 7 and add
 - Pytest
 - HTTPX
 
-### Database, Container, and Delivery Infrastructure
+### Database, Container, Cloud, and Delivery Infrastructure
 
-- PostgreSQL 18 Alpine
+- PostgreSQL 18 Alpine for local development
 - Docker and Docker Compose
 - Multi-stage Docker builds
 - Nginx Unprivileged 1.30 Alpine
@@ -107,14 +116,22 @@ Phase 8 retains the 58 automated backend and frontend tests from Phase 7 and add
 - GitHub Actions with monorepo path filters and concurrency control
 - GitHub Container Registry
 - Commit-SHA and rolling `main` image tags
+- Azure Resource Manager and Bicep
+- Azure Container Apps consumption environment
+- Azure Container Apps Job for Alembic migrations
+- Azure Database for PostgreSQL Flexible Server 18
+- Azure Log Analytics workspace
 - SQLite in-memory test database
-- Environment variables through `.env`
+- Environment variables and managed runtime secrets
 
-### Planned Infrastructure
+### Production Infrastructure
 
-- Cloud deployment
-- Centralized logging
-- Application monitoring
+- Public HTTPS Nginx and React Container App
+- Internal-ingress FastAPI Container App
+- Burstable `Standard_B1ms` PostgreSQL with 32 GB storage and high availability disabled
+- Container Apps minimum replicas of zero and maximum replicas of one
+- Log Analytics retention of 30 days with a 1 GB daily ingestion cap
+- Manually approved deployment from immutable GHCR commit-SHA images
 
 ## Project Structure
 
@@ -149,7 +166,8 @@ cloud-deployed-full-stack-system/
 |   |-- .dockerignore
 |   `-- Dockerfile
 |-- docs/
-|   `-- architecture.md
+|   |-- architecture.md
+|   `-- production-release.md
 |-- frontend/
 |   |-- src/
 |   |   |-- api/
@@ -164,6 +182,14 @@ cloud-deployed-full-stack-system/
 |   |-- .dockerignore
 |   |-- Dockerfile
 |   `-- nginx.conf
+|-- infra/
+|   |-- modules/
+|   |   |-- container-apps.bicep
+|   |   |-- database.bicep
+|   |   `-- monitoring.bicep
+|   |-- parameters/portfolio.bicepparam
+|   |-- main.bicep
+|   `-- README.md
 |-- scripts/
 |   `-- ci_smoke.py
 |-- .env.example
@@ -510,16 +536,14 @@ Apply pending migrations with `.\.venv\Scripts\python.exe -m alembic upgrade hea
 
 ### Backend Tests
 
-Backend integration tests use isolated SQLite in-memory storage and do not modify PostgreSQL development data.
+Backend integration tests use isolated SQLite in-memory storage and do not modify PostgreSQL development or production data.
 
 ```powershell
 cd backend
 .\.venv\Scripts\python.exe -m pytest -v
 ```
 
-Current expected result: **27 passed**.
-
-Coverage includes authentication, database-backed authorization, Incident CRUD and filters, dashboard aggregation, administrator-only audit access, mutation audit records, actor snapshots, field-level changes, transaction rollback, suppression of failed or no-op audit events, and administrator-bootstrap actor integration.
+The suite covers authentication, database-backed authorization, Incident CRUD and filters, dashboard aggregation, administrator-only audit access, mutation audit records, actor snapshots, field-level changes, transaction rollback, administrator bootstrap, request IDs, structured request logging, and suppression of sensitive query values.
 
 ### Frontend Tests
 
@@ -533,7 +557,7 @@ Current expected result: **9 test files and 31 tests passed**, followed by a suc
 
 Coverage includes session state, route guards, API clients, Incident role workflows, pagination, filters, filtered empty states, dashboard metrics, administrator audit presentation, and recoverable request failures.
 
-Together, the backend and frontend suites provide **58 automated tests**. Phase 8 adds CI validation of the migration graph, reproducible dependency installation, production output, Compose rendering and image builds, migration exit state, non-root identities, service health, proxy behavior, SPA fallback, required API discovery, security headers, and immutable asset caching.
+The CI workflow executes the complete backend and frontend suites. It also validates the Alembic migration graph, reproducible dependency installation, production output, Compose rendering and image builds, migration exit state, non-root identities, service health, proxy behavior, SPA fallback, request correlation, required API discovery, security headers, and immutable asset caching.
 
 ## CI/CD Automation
 
@@ -548,7 +572,7 @@ The repository-level `Cloud Operations CI/CD` workflow is path-scoped to `cloud-
 
 | Job | Responsibility |
 |---|---|
-| Backend tests and migration graph | Installs pinned Python dependencies, compiles source and tests, verifies one Alembic head, and runs 27 tests |
+| Backend tests and migration graph | Installs pinned Python dependencies, compiles source and tests, verifies one Alembic head, and runs the complete Pytest suite |
 | Frontend tests and production build | Uses `npm ci`, runs 31 tests, builds Vite output, and verifies the entry point and JavaScript bundle |
 | Compose end-to-end validation | Builds and starts the production-like stack, verifies migration and runtime identities, and runs `scripts/ci_smoke.py` |
 | Publish deployment images to GHCR | Authenticates with the job-scoped `GITHUB_TOKEN` and publishes only from `main` |
@@ -568,6 +592,23 @@ Run the smoke test against the default local Compose ports with:
 .\backend\.venv\Scripts\python.exe scripts\ci_smoke.py
 ```
 
+## Azure Production Deployment
+
+| Item | Production value |
+|---|---|
+| Public application | [Cloud Operations Platform](https://frontend-bdo5hkkvipb3s.victoriousforest-190ae510.northcentralus.azurecontainerapps.io) |
+| Azure region | `northcentralus` |
+| Resource group | `rg-cloud-operations-portfolio-northcentralus` |
+| Release source | `32ba84f1d310410fda315c9e348acc8fb0ab87d3` |
+| Frontend | `frontend-bdo5hkkvipb3s` with external HTTPS ingress |
+| Backend | `backend-bdo5hkkvipb3s` with internal ingress |
+| Migration job | `migration-bdo5hkkvipb3s` |
+| PostgreSQL | `pg-cloudops-portfolio-bdo5hkkvipb3s` |
+| Log Analytics | `log-cloudops-portfolio-bdo5hkkvipb3s` |
+
+The GitHub Actions workflow validates the code and publishes immutable images. Azure deployment remains a deliberate, manually approved release step: validate providers, review ARM what-if output, authorize resource creation, run the migration job, bootstrap the first administrator, execute the production smoke test, and inspect centralized logs.
+
+Production verification confirmed direct and proxied liveness and readiness, database availability, request correlation, SPA fallback, JavaScript delivery, restrictive response headers, immutable asset caching, required API paths, authenticated administrator access, and centralized application and Azure system logs. See [Production Release Evidence](docs/production-release.md) for the complete release record and cost boundary.
 ## API Endpoints
 
 | Method | Endpoint | Access | Description |
@@ -641,7 +682,7 @@ closed
 - Compose diagnostics run on failure and isolated CI volumes are always removed.
 - Published images include source-repository and commit-revision labels.
 
-Session storage does not protect a token from malicious JavaScript executing in the same page. Cloud deployment must use HTTPS, managed secrets, a restrictive Content Security Policy, production-specific origin configuration, immutable image references, and environment-specific release approval.
+Session storage does not protect a token from malicious JavaScript executing in the same page. The Azure deployment uses HTTPS ingress, Container Apps secrets, a restrictive Content Security Policy, production-specific origin configuration, immutable image references, and a manually reviewed release. The cost-first database profile uses a public PostgreSQL endpoint with mandatory TLS and an Azure-services firewall rule; a paid production environment should replace that trade-off with private networking and managed database identity.
 
 ## Development Roadmap
 
@@ -655,7 +696,7 @@ Session storage does not protect a token from malicious JavaScript executing in 
 | 6 | Dashboard, filtering, and audit history | Complete |
 | 7 | Docker and local service integration | Complete |
 | 8 | Automated testing and CI/CD | Complete |
-| 9 | Cloud deployment and observability | Planned |
+| 9 | Cloud deployment and observability | Complete |
 
 ## Author
 

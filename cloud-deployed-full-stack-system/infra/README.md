@@ -1,6 +1,23 @@
 # Phase 9 Azure Infrastructure
 
-This directory contains the cost-first Azure deployment foundation for the Cloud Operations Platform.
+This directory contains the cost-first Azure deployment foundation for the Cloud Operations Platform. The portfolio profile is deployed and validated in Azure North Central US.
+
+## Deployed Portfolio Environment
+
+| Item | Value |
+|---|---|
+| Region | `northcentralus` |
+| Resource group | `rg-cloud-operations-portfolio-northcentralus` |
+| Release source | `32ba84f1d310410fda315c9e348acc8fb0ab87d3` |
+| Public frontend | [Cloud Operations Platform](https://frontend-bdo5hkkvipb3s.victoriousforest-190ae510.northcentralus.azurecontainerapps.io) |
+| Container Apps environment | `cae-cloudops-portfolio-bdo5hkkvipb3s` |
+| Frontend app | `frontend-bdo5hkkvipb3s` |
+| Backend app | `backend-bdo5hkkvipb3s` |
+| Migration job | `migration-bdo5hkkvipb3s` |
+| PostgreSQL server | `pg-cloudops-portfolio-bdo5hkkvipb3s` |
+| Log Analytics workspace | `log-cloudops-portfolio-bdo5hkkvipb3s` |
+
+Availability is best-effort because this is a cost-controlled portfolio deployment.
 
 ## Topology
 
@@ -40,7 +57,7 @@ The frontend image renders `nginx.conf` from an environment-variable template. `
 
 The frontend responses add a restrictive Content Security Policy and Permissions Policy while retaining the existing clickjacking, MIME-sniffing, and referrer protections.
 
-## Validation
+## Validation and Release Procedure
 
 Compile without deploying resources:
 
@@ -49,4 +66,28 @@ az bicep build --file infra/main.bicep --stdout | Out-Null
 az bicep build-params --file infra/parameters/portfolio.bicepparam --stdout | Out-Null
 ```
 
-Run an Azure Resource Manager `what-if` before every deployment. Do not run a deployment until the expected resource list and current subscription have been reviewed.
+Before every deployment, confirm the active Azure subscription, verify immutable GHCR commit-SHA images, run ARM provider validation, and review an ARM `what-if`. Do not deploy unless the expected resource changes contain no unplanned deletes.
+
+Infrastructure deployment does not execute migrations or create an administrator. Start the migration job separately, require a `Succeeded` execution, and then run the idempotent administrator bootstrap inside the backend container. Never put a password or deployment secret in shell history, logs, screenshots, or Git.
+
+## Post-deployment Validation
+
+The production release must pass:
+
+- Direct backend liveness and database readiness
+- Nginx-proxied liveness and readiness
+- One safe request ID per response
+- SPA fallback and fingerprinted JavaScript delivery
+- Restrictive security headers and immutable asset caching
+- Required API route discovery
+- Authenticated administrator UI access
+- Structured backend request logs in Log Analytics
+- Zero unexpected application and Azure system errors
+
+The initial production release passed all checks. Its observation window contained 192 structured backend requests, zero application error-like records, and zero Azure system errors for both applications.
+
+## Cost Operations
+
+The Azure budget and its email alerts monitor spend but do not stop resources. Container Apps can scale to zero, while PostgreSQL remains provisioned until explicitly stopped or deleted. Review Cost Management regularly and remove the resource group when the public portfolio environment is no longer needed.
+
+Do not delete the resource group merely to rerun validation. Teardown is a separate destructive operation and requires an explicit resource inventory and confirmation.
