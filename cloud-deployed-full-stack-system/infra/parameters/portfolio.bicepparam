@@ -1,6 +1,6 @@
 using '../main.bicep'
 
-param location = 'eastus'
+param location = 'northcentralus'
 param environmentName = 'portfolio'
 param backendImage = readEnvironmentVariable('PHASE9_BACKEND_IMAGE')
 param frontendImage = readEnvironmentVariable('PHASE9_FRONTEND_IMAGE')

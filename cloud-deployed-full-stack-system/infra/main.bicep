@@ -2,9 +2,9 @@ targetScope = 'resourceGroup'
 
 @description('Azure region selected by the Phase 9 capability preflight.')
 @allowed([
-  'eastus'
+  'northcentralus'
 ])
-param location string = 'eastus'
+param location string = 'northcentralus'
 
 @description('Short environment label used in Azure resource names and tags.')
 @minLength(2)
