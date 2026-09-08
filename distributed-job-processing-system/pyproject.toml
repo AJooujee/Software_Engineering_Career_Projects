@@ -1,0 +1,41 @@
+[build-system]
+requires = ["hatchling>=1.27"]
+build-backend = "hatchling.build"
+
+[project]
+name = "distributed-job-processing-system"
+version = "0.1.0"
+description = "A distributed job queue with concurrent workers, retries, idempotency, and fault recovery."
+readme = "README.md"
+requires-python = ">=3.12"
+authors = [
+    { name = "AJ C Pipattanakun" }
+]
+dependencies = [
+    "fastapi>=0.115,<1.0",
+    "uvicorn[standard]>=0.34,<1.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "httpx2>=2.12,<3.0",
+    "pytest>=8.3,<10.0",
+    "pytest-asyncio>=0.25,<2.0",
+    "ruff>=0.11,<1.0",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/job_system"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
+asyncio_mode = "auto"
+addopts = "-ra --strict-markers"
+
+[tool.ruff]
+target-version = "py312"
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP"]
