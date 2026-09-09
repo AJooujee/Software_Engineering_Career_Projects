@@ -1,20 +1,4 @@
-from collections.abc import AsyncIterator
-
-import pytest
-from httpx2 import ASGITransport, AsyncClient
-
-from job_system.main import app
-
-
-@pytest.fixture
-async def client() -> AsyncIterator[AsyncClient]:
-    transport = ASGITransport(app=app)
-
-    async with AsyncClient(
-        transport=transport,
-        base_url="http://test",
-    ) as test_client:
-        yield test_client
+from httpx2 import AsyncClient
 
 
 async def test_service_info(client: AsyncClient) -> None:
@@ -23,7 +7,7 @@ async def test_service_info(client: AsyncClient) -> None:
     assert response.status_code == 200
     assert response.json() == {
         "service": "distributed-job-processing-system",
-        "version": "0.1.0",
+        "version": "0.2.0",
         "documentation": "/docs",
     }
 
@@ -35,5 +19,5 @@ async def test_liveness_check(client: AsyncClient) -> None:
     assert response.json() == {
         "status": "healthy",
         "service": "distributed-job-processing-system",
-        "version": "0.1.0",
+        "version": "0.2.0",
     }
