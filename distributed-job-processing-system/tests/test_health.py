@@ -7,7 +7,7 @@ async def test_service_info(client: AsyncClient) -> None:
     assert response.status_code == 200
     assert response.json() == {
         "service": "distributed-job-processing-system",
-        "version": "0.2.0",
+        "version": "0.3.0",
         "documentation": "/docs",
     }
 
@@ -19,5 +19,5 @@ async def test_liveness_check(client: AsyncClient) -> None:
     assert response.json() == {
         "status": "healthy",
         "service": "distributed-job-processing-system",
-        "version": "0.2.0",
+        "version": "0.3.0",
     }

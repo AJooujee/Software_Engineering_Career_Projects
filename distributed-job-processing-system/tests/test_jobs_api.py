@@ -27,6 +27,12 @@ class FakeJobService:
             payload=job_data.payload,
             status=JobStatus.QUEUED,
             priority=job_data.priority,
+            attempt_count=0,
+            worker_id=None,
+            result=None,
+            last_error=None,
+            started_at=None,
+            completed_at=None,
             created_at=now,
             updated_at=now,
         )

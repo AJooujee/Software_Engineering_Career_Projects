@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "distributed-job-processing-system"
-version = "0.2.0"
+version = "0.3.0"
 description = "A distributed job queue with concurrent workers, retries, idempotency, and fault recovery."
 readme = "README.md"
 requires-python = ">=3.12"
@@ -19,6 +19,10 @@ dependencies = [
     "sqlalchemy[asyncio]>=2.0,<3.0",
     "uvicorn[standard]>=0.34,<1.0",
 ]
+
+[project.scripts]
+# Start a concurrent PostgreSQL-backed worker process.
+job-worker = "job_system.worker:main"
 
 [project.optional-dependencies]
 dev = [
