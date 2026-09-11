@@ -2,8 +2,8 @@
 
 A portfolio-grade distributed job queue built with Python, FastAPI, PostgreSQL, and SQLAlchemy.
 
-**Current version:** `0.2.0`
-**Current status:** Phase 2 of 8 completed
+**Current version:** `0.3.0`
+**Current status:** Phase 3 of 8 completed
 
 ## Overview
 
@@ -47,6 +47,20 @@ flowchart TD
 - Create, retrieve, list, filter, and paginate jobs
 - Repository, service, and API layers
 
+### Phase 3 — Workers and Concurrency
+
+- PostgreSQL-backed worker runtime
+- Atomic job claiming with `FOR UPDATE SKIP LOCKED`
+- Configurable queue subscriptions and worker concurrency
+- Concurrent asynchronous worker slots
+- Priority-first and FIFO job selection
+- Task-handler registry for report, email, and echo jobs
+- Persistent worker ownership and attempt counts
+- Successful result persistence
+- Failed-job transition to `dead_lettered`
+- Graceful shutdown that allows active jobs to finish
+- Worker CLI available through `job-worker`
+
 ## API Endpoints
 
 | Method | Endpoint | Description |
@@ -74,7 +88,6 @@ flowchart TD
 ```
 
 A newly submitted job receives a UUID and begins with the `queued` status.
-
 ## Local Setup
 
 ### 1. Create the Python environment
@@ -120,7 +133,18 @@ Open Swagger UI at:
 http://127.0.0.1:8000/docs
 ```
 
-### 6. Stop local services
+### 6. Start a Worker
+
+Open another terminal, activate the virtual environment, and run:
+
+```powershell
+.\.venv\Scripts\Activate.ps1
+job-worker
+```
+
+The worker consumes jobs from the configured queues and processes up to four jobs concurrently by default. Press `Ctrl+C` to stop claiming new jobs and allow active jobs to finish.
+
+### 7. Stop local services
 
 ```powershell
 docker compose down
@@ -137,47 +161,22 @@ alembic check
 docker compose config --quiet
 ```
 
-Current automated test count: **6**
+Current automated test count: **17**
 
 ## Project Structure
 
-```text
-distributed-job-processing-system/
-├── migrations/
-│   ├── versions/
-│   │   └── b63bc8dd8717_create_jobs_table.py
-│   ├── env.py
-│   └── script.py.mako
-├── src/
-│   └── job_system/
-│       ├── api/
-│       │   ├── __init__.py
-│       │   └── jobs.py
-│       ├── __init__.py
-│       ├── config.py
-│       ├── db.py
-│       ├── main.py
-│       ├── models.py
-│       ├── repository.py
-│       ├── schemas.py
-│       └── services.py
-├── tests/
-│   ├── conftest.py
-│   ├── test_health.py
-│   └── test_jobs_api.py
-├── .env.example
-├── .gitignore
-├── alembic.ini
-├── compose.yaml
-├── pyproject.toml
-└── README.md
-```
+ab243a2532b3_add_worker_processing_fields.py
+handlers.py
+queue.py
+worker.py
+test_handlers.py
+test_worker.py
 
 ## Development Roadmap
 
 - [x] Phase 1 — Project Foundation
 - [x] Phase 2 — Persistent Job Queue
-- [ ] Phase 3 — Workers and Concurrency
+- [x] Phase 3 — Workers and Concurrency
 - [ ] Phase 4 — Retry and Dead-Letter Queue
 - [ ] Phase 5 — Idempotency
 - [ ] Phase 6 — Fault Recovery

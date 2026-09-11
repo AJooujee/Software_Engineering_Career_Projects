@@ -56,5 +56,11 @@ class JobRead(BaseModel):
     payload: dict[str, Any]
     status: JobStatus
     priority: int
+    attempt_count: int
+    worker_id: str | None
+    result: dict[str, Any] | None
+    last_error: str | None
+    started_at: datetime | None
+    completed_at: datetime | None
     created_at: datetime
     updated_at: datetime
