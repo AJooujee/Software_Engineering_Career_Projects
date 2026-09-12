@@ -28,6 +28,8 @@ class FakeJobService:
             status=JobStatus.QUEUED,
             priority=job_data.priority,
             attempt_count=0,
+            max_attempts=job_data.max_attempts,
+            available_at=now,
             worker_id=None,
             result=None,
             last_error=None,
@@ -101,6 +103,8 @@ async def test_create_and_fetch_job(
     assert create_response.status_code == 201
     created_job = create_response.json()
     assert created_job["status"] == "queued"
+    assert created_job["max_attempts"] == 3
+    assert created_job["available_at"] is not None
 
     fetch_response = await client.get(f"/jobs/{created_job['id']}")
 
@@ -160,6 +164,37 @@ async def test_create_job_rejects_invalid_priority(
         json={
             "task_name": "generate-report",
             "priority": 101,
+        },
+    )
+
+    assert response.status_code == 422
+
+
+async def test_create_job_accepts_custom_max_attempts(
+    client: AsyncClient,
+    fake_job_service: FakeJobService,
+) -> None:
+    response = await client.post(
+        "/jobs",
+        json={
+            "task_name": "generate-report",
+            "max_attempts": 5,
+        },
+    )
+
+    assert response.status_code == 201
+    assert response.json()["max_attempts"] == 5
+
+
+async def test_create_job_rejects_invalid_max_attempts(
+    client: AsyncClient,
+    fake_job_service: FakeJobService,
+) -> None:
+    response = await client.post(
+        "/jobs",
+        json={
+            "task_name": "generate-report",
+            "max_attempts": 0,
         },
     )
 

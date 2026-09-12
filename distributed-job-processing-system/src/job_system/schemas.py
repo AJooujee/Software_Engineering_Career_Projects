@@ -19,6 +19,7 @@ class JobCreate(BaseModel):
                         "format": "pdf",
                     },
                     "priority": 10,
+                    "max_attempts": 3,
                 }
             ]
         }
@@ -37,6 +38,7 @@ class JobCreate(BaseModel):
     )
     payload: dict[str, Any] = Field(default_factory=dict)
     priority: int = Field(default=0, ge=-100, le=100)
+    max_attempts: int = Field(default=3, ge=1, le=100)
 
     @field_validator("queue", "task_name")
     @classmethod
@@ -57,6 +59,8 @@ class JobRead(BaseModel):
     status: JobStatus
     priority: int
     attempt_count: int
+    max_attempts: int
+    available_at: datetime
     worker_id: str | None
     result: dict[str, Any] | None
     last_error: str | None
