@@ -25,6 +25,20 @@ class Settings(BaseSettings):
     # Delay before polling PostgreSQL again when no job is available.
     worker_poll_interval_seconds: float = Field(default=0.5, gt=0, le=30)
 
+    # Initial delay before the first retry attempt.
+    worker_retry_base_delay_seconds: float = Field(
+        default=5.0,
+        ge=0,
+        le=3600,
+    )
+
+    # Upper bound prevents exponential backoff from growing indefinitely.
+    worker_retry_max_delay_seconds: float = Field(
+        default=300.0,
+        ge=0,
+        le=86400,
+    )
+
     @property
     def worker_queue_names(self) -> tuple[str, ...]:
         """Return normalized queue names configured for the worker."""

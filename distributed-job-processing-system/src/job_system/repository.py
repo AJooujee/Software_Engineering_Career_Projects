@@ -15,6 +15,7 @@ def add_job(session: AsyncSession, job_data: JobCreate) -> Job:
         task_name=job_data.task_name,
         payload=job_data.payload,
         priority=job_data.priority,
+        max_attempts=job_data.max_attempts,
         status=JobStatus.QUEUED,
     )
 

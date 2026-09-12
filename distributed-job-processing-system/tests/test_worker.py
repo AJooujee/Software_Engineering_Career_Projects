@@ -3,6 +3,9 @@
 from typing import Any
 from uuid import UUID, uuid4
 
+import pytest
+
+from job_system.models import JobStatus
 from job_system.worker import JobWorker
 
 
@@ -37,7 +40,10 @@ class FakeJobQueue:
         job_id: UUID,
         worker_id: str,
         error_message: str,
-    ) -> bool:
+        retryable: bool,
+        retry_base_delay_seconds: float,
+        retry_max_delay_seconds: float,
+    ) -> JobStatus:
         """Record a failed job transition."""
 
         self.failed_jobs.append(
@@ -45,9 +51,12 @@ class FakeJobQueue:
                 "job_id": job_id,
                 "worker_id": worker_id,
                 "error_message": error_message,
+                "retryable": retryable,
+                "retry_base_delay_seconds": retry_base_delay_seconds,
+                "retry_max_delay_seconds": retry_max_delay_seconds,
             }
         )
-        return True
+        return JobStatus.DEAD_LETTERED
 
 
 class FakeJob:
@@ -73,6 +82,8 @@ def create_worker(queue: FakeJobQueue) -> JobWorker:
         queue_names=("default",),
         concurrency=1,
         poll_interval_seconds=0.01,
+        retry_base_delay_seconds=5.0,
+        retry_max_delay_seconds=300.0,
     )
 
 
@@ -126,3 +137,38 @@ async def test_worker_marks_failed_job() -> None:
     assert queue.failed_jobs[0]["error_message"] == (
         "InvalidTaskPayloadError: recipient must be a non-empty string"
     )
+    assert queue.failed_jobs[0]["retryable"] is False
+    assert queue.failed_jobs[0]["retry_base_delay_seconds"] == 5.0
+    assert queue.failed_jobs[0]["retry_max_delay_seconds"] == 300.0
+
+
+async def test_worker_marks_temporary_error_as_retryable(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    queue = FakeJobQueue()
+    worker = create_worker(queue)
+    job = FakeJob(
+        task_name="temporary-task",
+        payload={},
+    )
+
+    async def raise_temporary_error(
+        task_name: str,
+        payload: dict[str, Any],
+    ) -> dict[str, Any]:
+        del task_name, payload
+        raise RuntimeError("temporary service unavailable")
+
+    monkeypatch.setattr(
+        "job_system.worker.execute_task",
+        raise_temporary_error,
+    )
+
+    await worker._process_job(job, slot_number=1)  # type: ignore[arg-type]
+
+    assert queue.succeeded_jobs == []
+    assert len(queue.failed_jobs) == 1
+    assert queue.failed_jobs[0]["error_message"] == ("RuntimeError: temporary service unavailable")
+    assert queue.failed_jobs[0]["retryable"] is True
+    assert queue.failed_jobs[0]["retry_base_delay_seconds"] == 5.0
+    assert queue.failed_jobs[0]["retry_max_delay_seconds"] == 300.0

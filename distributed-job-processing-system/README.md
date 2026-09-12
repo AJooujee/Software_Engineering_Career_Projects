@@ -2,14 +2,16 @@
 
 A portfolio-grade distributed job queue built with Python, FastAPI, PostgreSQL, and SQLAlchemy.
 
-**Current version:** `0.3.0`
-**Current status:** Phase 3 of 8 completed
+**Current version:** `0.4.0`
+**Current status:** Phase 4 of 8 completed
 
 ## Overview
 
-This project demonstrates how a durable background job-processing platform is designed and built incrementally. API clients can submit jobs, store them safely in PostgreSQL, retrieve individual jobs, and search the queue using filters and pagination.
+This project demonstrates how a durable background job-processing platform is designed and built incrementally. API clients can submit jobs to PostgreSQL, while concurrent workers atomically claim and execute available work.
 
-Future phases will add concurrent workers, atomic job claiming, retries, idempotency, fault recovery, and observability.
+Failed jobs are classified as retryable or non-retryable. Retryable jobs use scheduled exponential backoff and transition to the dead-letter queue after exhausting their configured attempts.
+
+Future phases will add idempotency, fault recovery, observability, and production-readiness features.
 
 ## Architecture
 
@@ -19,12 +21,12 @@ flowchart TD
     API --> Queue[(PostgreSQL Job Queue)]
     Queue --> Workers[Concurrent Worker Pool]
     Workers --> Results[(Results and Attempts)]
-    Recovery[Fault Recovery] --> Queue
+    Recovery[Retry Scheduling] --> Queue
 ```
 
 ## Implemented Capabilities
 
-### Phase 1 — Project Foundation
+### Phase 1 - Project Foundation
 
 - Python 3.12 project with a professional `src` layout
 - FastAPI application and interactive Swagger documentation
@@ -32,7 +34,7 @@ flowchart TD
 - Asynchronous API tests
 - Ruff linting and formatting
 
-### Phase 2 — Persistent Job Queue
+### Phase 2 - Persistent Job Queue
 
 - PostgreSQL 17 development database
 - Docker Compose configuration and persistent database volume
@@ -47,7 +49,7 @@ flowchart TD
 - Create, retrieve, list, filter, and paginate jobs
 - Repository, service, and API layers
 
-### Phase 3 — Workers and Concurrency
+### Phase 3 - Workers and Concurrency
 
 - PostgreSQL-backed worker runtime
 - Atomic job claiming with `FOR UPDATE SKIP LOCKED`
@@ -57,9 +59,21 @@ flowchart TD
 - Task-handler registry for report, email, and echo jobs
 - Persistent worker ownership and attempt counts
 - Successful result persistence
-- Failed-job transition to `dead_lettered`
 - Graceful shutdown that allows active jobs to finish
 - Worker CLI available through `job-worker`
+
+### Phase 4 - Retry and Dead-Letter Queue
+
+- Configurable maximum attempts per job
+- Retryable and non-retryable error classification
+- Persistent `retry_scheduled` job state
+- Time-based retry availability
+- Exponential backoff with a configurable maximum delay
+- Worker claims only jobs whose `available_at` time has arrived
+- Automatic transition to `dead_lettered` after attempts are exhausted
+- Immediate dead-lettering for invalid or unsupported tasks
+- Unit tests for retry policy and backoff calculations
+- PostgreSQL lifecycle validation from initial claim through dead-lettering
 
 ## API Endpoints
 
@@ -83,11 +97,13 @@ flowchart TD
     "report_id": "sales-2026-09",
     "format": "pdf"
   },
-  "priority": 10
+  "priority": 10,
+  "max_attempts": 3
 }
 ```
 
-A newly submitted job receives a UUID and begins with the `queued` status.
+A newly submitted job receives a UUID, begins with the `queued` status, and defaults to three total execution attempts.
+
 ## Local Setup
 
 ### 1. Create the Python environment
@@ -106,6 +122,16 @@ Copy-Item .env.example .env
 ```
 
 The local PostgreSQL service uses port `5433` to avoid conflicts with other projects.
+
+Worker settings can be configured through:
+
+```dotenv
+JOB_WORKER_QUEUES=default,reports,emails
+JOB_WORKER_CONCURRENCY=4
+JOB_WORKER_POLL_INTERVAL_SECONDS=0.5
+JOB_WORKER_RETRY_BASE_DELAY_SECONDS=5
+JOB_WORKER_RETRY_MAX_DELAY_SECONDS=300
+```
 
 ### 3. Start PostgreSQL
 
@@ -156,32 +182,66 @@ The named Docker volume preserves PostgreSQL data between container restarts.
 
 ```powershell
 ruff check .
+ruff format --check .
 pytest
 alembic check
 docker compose config --quiet
 ```
 
-Current automated test count: **17**
+Current automated test count: **29**
 
 ## Project Structure
 
-ab243a2532b3_add_worker_processing_fields.py
-handlers.py
-queue.py
-worker.py
-test_handlers.py
-test_worker.py
+```text
+distributed-job-processing-system/
+|-- migrations/
+|   |-- versions/
+|   |   |-- b63bc8dd8717_create_jobs_table.py
+|   |   |-- ab243a2532b3_add_worker_processing_fields.py
+|   |   `-- f233f5d3a0fd_add_retry_scheduling_fields.py
+|   |-- env.py
+|   `-- script.py.mako
+|-- src/
+|   `-- job_system/
+|       |-- api/
+|       |   |-- __init__.py
+|       |   `-- jobs.py
+|       |-- __init__.py
+|       |-- config.py
+|       |-- db.py
+|       |-- handlers.py
+|       |-- main.py
+|       |-- models.py
+|       |-- queue.py
+|       |-- repository.py
+|       |-- schemas.py
+|       |-- services.py
+|       `-- worker.py
+|-- tests/
+|   |-- conftest.py
+|   |-- test_handlers.py
+|   |-- test_health.py
+|   |-- test_jobs_api.py
+|   |-- test_queue.py
+|   `-- test_worker.py
+|-- .env.example
+|-- .gitignore
+|-- alembic.ini
+|-- compose.yaml
+|-- pyproject.toml
+`-- README.md
+```
 
 ## Development Roadmap
 
-- [x] Phase 1 — Project Foundation
-- [x] Phase 2 — Persistent Job Queue
-- [x] Phase 3 — Workers and Concurrency
-- [ ] Phase 4 — Retry and Dead-Letter Queue
-- [ ] Phase 5 — Idempotency
-- [ ] Phase 6 — Fault Recovery
-- [ ] Phase 7 — Observability
-- [ ] Phase 8 — Production Readiness
+- [x] Phase 1 - Project Foundation
+- [x] Phase 2 - Persistent Job Queue
+- [x] Phase 3 - Workers and Concurrency
+- [x] Phase 4 - Retry and Dead-Letter Queue
+- [ ] Phase 5 - Idempotency
+- [ ] Phase 6 - Fault Recovery
+- [ ] Phase 7 - Observability
+- [ ] Phase 8 - Production Readiness
 
 ## Author
 

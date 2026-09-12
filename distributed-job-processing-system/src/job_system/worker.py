@@ -8,7 +8,7 @@ from uuid import uuid4
 
 from job_system.config import get_settings
 from job_system.db import SessionFactory
-from job_system.handlers import execute_task
+from job_system.handlers import TaskHandlerError, execute_task
 from job_system.models import Job
 from job_system.queue import PostgresJobQueue
 
@@ -26,12 +26,16 @@ class JobWorker:
         queue_names: tuple[str, ...],
         concurrency: int,
         poll_interval_seconds: float,
+        retry_base_delay_seconds: float,
+        retry_max_delay_seconds: float,
     ) -> None:
         self.queue = queue
         self.worker_id = worker_id
         self.queue_names = queue_names
         self.concurrency = concurrency
         self.poll_interval_seconds = poll_interval_seconds
+        self.retry_base_delay_seconds = retry_base_delay_seconds
+        self.retry_max_delay_seconds = retry_max_delay_seconds
         self._stop_event = asyncio.Event()
 
     def request_stop(self) -> None:
@@ -119,16 +123,27 @@ class JobWorker:
             logger.exception("Job %s failed", job.id)
 
             try:
-                updated = await self.queue.mark_failed(
+                resulting_status = await self.queue.mark_failed(
                     job_id=job.id,
                     worker_id=self.worker_id,
                     error_message=f"{type(exc).__name__}: {exc}",
+                    # Handler errors describe invalid or unsupported work.
+                    # Other exceptions may represent temporary failures.
+                    retryable=not isinstance(exc, TaskHandlerError),
+                    retry_base_delay_seconds=self.retry_base_delay_seconds,
+                    retry_max_delay_seconds=self.retry_max_delay_seconds,
                 )
 
-                if not updated:
+                if resulting_status is None:
                     logger.warning(
                         "Job %s could not be marked failed because ownership changed",
                         job.id,
+                    )
+                else:
+                    logger.info(
+                        "Job %s transitioned to %s",
+                        job.id,
+                        resulting_status.value,
                     )
             except Exception:
                 # Persistence errors are isolated to this job so that the other
@@ -172,6 +187,8 @@ async def run_worker() -> None:
         queue_names=settings.worker_queue_names,
         concurrency=settings.worker_concurrency,
         poll_interval_seconds=settings.worker_poll_interval_seconds,
+        retry_base_delay_seconds=settings.worker_retry_base_delay_seconds,
+        retry_max_delay_seconds=settings.worker_retry_max_delay_seconds,
     )
 
     worker_task = asyncio.create_task(worker.run())

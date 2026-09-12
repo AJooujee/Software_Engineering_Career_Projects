@@ -43,11 +43,20 @@ class Job(Base):
             "attempt_count >= 0",
             name="ck_jobs_attempt_count_nonnegative",
         ),
+        CheckConstraint(
+            "max_attempts BETWEEN 1 AND 100",
+            name="ck_jobs_max_attempts_range",
+        ),
         Index(
             "ix_jobs_queue_status_priority",
             "queue",
             "status",
             "priority",
+        ),
+        Index(
+            "ix_jobs_status_available_at",
+            "status",
+            "available_at",
         ),
     )
 
@@ -97,6 +106,21 @@ class Job(Base):
         default=0,
         server_default="0",
     )
+    # Maximum total executions, including the initial attempt.
+    max_attempts: Mapped[int] = mapped_column(
+        Integer,
+        nullable=False,
+        default=3,
+        server_default="3",
+    )
+
+    # Queued and retry-scheduled jobs cannot be claimed before this time.
+    available_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+    )
+
     worker_id: Mapped[str | None] = mapped_column(
         String(200),
         nullable=True,
