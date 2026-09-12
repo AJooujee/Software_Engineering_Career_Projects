@@ -11,6 +11,7 @@ from sqlalchemy import (
     Integer,
     String,
     Text,
+    UniqueConstraint,
     func,
 )
 from sqlalchemy.dialects.postgresql import JSONB, UUID
@@ -46,6 +47,10 @@ class Job(Base):
         CheckConstraint(
             "max_attempts BETWEEN 1 AND 100",
             name="ck_jobs_max_attempts_range",
+        ),
+        UniqueConstraint(
+            "idempotency_key",
+            name="uq_jobs_idempotency_key",
         ),
         Index(
             "ix_jobs_queue_status_priority",
@@ -97,6 +102,11 @@ class Job(Base):
         nullable=False,
         default=0,
         server_default="0",
+    )
+    # Clients may reuse this key to safely repeat the same submission.
+    idempotency_key: Mapped[str | None] = mapped_column(
+        String(200),
+        nullable=True,
     )
 
     # Worker-processing fields are updated when a worker claims and finishes a job.

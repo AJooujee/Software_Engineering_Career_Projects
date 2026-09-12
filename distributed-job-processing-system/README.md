@@ -2,8 +2,8 @@
 
 A portfolio-grade distributed job queue built with Python, FastAPI, PostgreSQL, and SQLAlchemy.
 
-**Current version:** `0.4.0`
-**Current status:** Phase 4 of 8 completed
+**Current version:** `0.5.0`
+**Current status:** Phase 5 of 8 completed
 
 ## Overview
 
@@ -75,6 +75,17 @@ flowchart TD
 - Unit tests for retry policy and backoff calculations
 - PostgreSQL lifecycle validation from initial claim through dead-lettering
 
+### Phase 5 - Idempotency
+
+- Optional client-provided idempotency keys
+- PostgreSQL unique constraint for atomic duplicate prevention
+- Concurrent-safe insertion with `ON CONFLICT DO NOTHING`
+- Repeated identical submissions return the existing job
+- Conflicting reuse of an idempotency key returns HTTP `409`
+- Submissions without an idempotency key remain independent
+- Request validation for idempotency-key length and format
+- API and PostgreSQL concurrency validation
+
 ## API Endpoints
 
 | Method | Endpoint | Description |
@@ -99,6 +110,7 @@ flowchart TD
   },
   "priority": 10,
   "max_attempts": 3
+  "idempotency_key": "report-sales-2026-09"
 }
 ```
 
@@ -188,7 +200,7 @@ alembic check
 docker compose config --quiet
 ```
 
-Current automated test count: **29**
+Current automated test count: **34**
 
 ## Project Structure
 
@@ -199,6 +211,7 @@ distributed-job-processing-system/
 |   |   |-- b63bc8dd8717_create_jobs_table.py
 |   |   |-- ab243a2532b3_add_worker_processing_fields.py
 |   |   `-- f233f5d3a0fd_add_retry_scheduling_fields.py
+|   |   `-- b5f3b0955c95_add_job_idempotency_key.py
 |   |-- env.py
 |   `-- script.py.mako
 |-- src/
@@ -238,7 +251,7 @@ distributed-job-processing-system/
 - [x] Phase 2 - Persistent Job Queue
 - [x] Phase 3 - Workers and Concurrency
 - [x] Phase 4 - Retry and Dead-Letter Queue
-- [ ] Phase 5 - Idempotency
+- [x] Phase 5 - Idempotency
 - [ ] Phase 6 - Fault Recovery
 - [ ] Phase 7 - Observability
 - [ ] Phase 8 - Production Readiness

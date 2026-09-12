@@ -20,6 +20,7 @@ class JobCreate(BaseModel):
                     },
                     "priority": 10,
                     "max_attempts": 3,
+                    "idempotency_key": "report-sales-2026-09",
                 }
             ]
         }
@@ -39,6 +40,12 @@ class JobCreate(BaseModel):
     payload: dict[str, Any] = Field(default_factory=dict)
     priority: int = Field(default=0, ge=-100, le=100)
     max_attempts: int = Field(default=3, ge=1, le=100)
+    idempotency_key: str | None = Field(
+        default=None,
+        min_length=1,
+        max_length=200,
+        pattern=r"^[A-Za-z0-9_.:-]+$",
+    )
 
     @field_validator("queue", "task_name")
     @classmethod
@@ -58,6 +65,7 @@ class JobRead(BaseModel):
     payload: dict[str, Any]
     status: JobStatus
     priority: int
+    idempotency_key: str | None
     attempt_count: int
     max_attempts: int
     available_at: datetime

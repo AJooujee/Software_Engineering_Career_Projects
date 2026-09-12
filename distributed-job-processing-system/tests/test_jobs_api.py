@@ -9,6 +9,10 @@ from job_system.api.jobs import get_job_service
 from job_system.main import app
 from job_system.models import Job, JobStatus
 from job_system.schemas import JobCreate
+from job_system.services import (
+    IdempotencyConflictError,
+    job_matches_submission,
+)
 
 
 class FakeJobService:
@@ -18,6 +22,23 @@ class FakeJobService:
         self.jobs: dict[uuid.UUID, Job] = {}
 
     async def create_job(self, job_data: JobCreate) -> Job:
+        if job_data.idempotency_key is not None:
+            existing_job = next(
+                (
+                    job
+                    for job in self.jobs.values()
+                    if job.idempotency_key == job_data.idempotency_key
+                ),
+                None,
+            )
+
+            if existing_job is not None:
+                if not job_matches_submission(existing_job, job_data):
+                    raise IdempotencyConflictError(
+                        "Idempotency key is already associated with a different job submission"
+                    )
+
+                return existing_job
         now = datetime.now(UTC)
 
         job = Job(
@@ -27,6 +48,7 @@ class FakeJobService:
             payload=job_data.payload,
             status=JobStatus.QUEUED,
             priority=job_data.priority,
+            idempotency_key=job_data.idempotency_key,
             attempt_count=0,
             max_attempts=job_data.max_attempts,
             available_at=now,
@@ -199,3 +221,102 @@ async def test_create_job_rejects_invalid_max_attempts(
     )
 
     assert response.status_code == 422
+
+
+async def test_create_job_accepts_idempotency_key(
+    client: AsyncClient,
+    fake_job_service: FakeJobService,
+) -> None:
+    response = await client.post(
+        "/jobs",
+        json={
+            "task_name": "generate-report",
+            "idempotency_key": "report-sales-2026-09",
+        },
+    )
+
+    assert response.status_code == 201
+    assert response.json()["idempotency_key"] == "report-sales-2026-09"
+
+
+async def test_create_job_rejects_invalid_idempotency_key(
+    client: AsyncClient,
+    fake_job_service: FakeJobService,
+) -> None:
+    response = await client.post(
+        "/jobs",
+        json={
+            "task_name": "generate-report",
+            "idempotency_key": "contains spaces",
+        },
+    )
+
+    assert response.status_code == 422
+
+
+async def test_repeated_idempotent_submission_returns_same_job(
+    client: AsyncClient,
+    fake_job_service: FakeJobService,
+) -> None:
+    request_payload = {
+        "queue": "reports",
+        "task_name": "generate-report",
+        "payload": {"format": "pdf"},
+        "priority": 10,
+        "max_attempts": 3,
+        "idempotency_key": "same-report-request",
+    }
+
+    first_response = await client.post("/jobs", json=request_payload)
+    second_response = await client.post("/jobs", json=request_payload)
+
+    assert first_response.status_code == 201
+    assert second_response.status_code == 201
+    assert first_response.json()["id"] == second_response.json()["id"]
+    assert len(fake_job_service.jobs) == 1
+
+
+async def test_reused_idempotency_key_with_different_work_returns_409(
+    client: AsyncClient,
+    fake_job_service: FakeJobService,
+) -> None:
+    first_response = await client.post(
+        "/jobs",
+        json={
+            "task_name": "generate-report",
+            "priority": 10,
+            "idempotency_key": "conflicting-request",
+        },
+    )
+    second_response = await client.post(
+        "/jobs",
+        json={
+            "task_name": "generate-report",
+            "priority": 20,
+            "idempotency_key": "conflicting-request",
+        },
+    )
+
+    assert first_response.status_code == 201
+    assert second_response.status_code == 409
+    assert second_response.json() == {
+        "detail": ("Idempotency key is already associated with a different job submission")
+    }
+    assert len(fake_job_service.jobs) == 1
+
+
+async def test_submissions_without_idempotency_key_create_distinct_jobs(
+    client: AsyncClient,
+    fake_job_service: FakeJobService,
+) -> None:
+    request_payload = {
+        "task_name": "generate-report",
+    }
+
+    first_response = await client.post("/jobs", json=request_payload)
+    second_response = await client.post("/jobs", json=request_payload)
+
+    assert first_response.status_code == 201
+    assert second_response.status_code == 201
+    assert first_response.json()["id"] != second_response.json()["id"]
+    assert len(fake_job_service.jobs) == 2
