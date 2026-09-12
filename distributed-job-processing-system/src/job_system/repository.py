@@ -1,6 +1,7 @@
 import uuid
 
 from sqlalchemy import select
+from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from job_system.models import Job, JobStatus
@@ -15,6 +16,7 @@ def add_job(session: AsyncSession, job_data: JobCreate) -> Job:
         task_name=job_data.task_name,
         payload=job_data.payload,
         priority=job_data.priority,
+        idempotency_key=job_data.idempotency_key,
         max_attempts=job_data.max_attempts,
         status=JobStatus.QUEUED,
     )
@@ -22,6 +24,51 @@ def add_job(session: AsyncSession, job_data: JobCreate) -> Job:
     # SQLAlchemy tracks the object now, but no SQL is executed until flush/commit.
     session.add(job)
     return job
+
+
+async def create_or_get_idempotent_job(
+    session: AsyncSession,
+    job_data: JobCreate,
+) -> tuple[Job, bool]:
+    """Create a job or return the job that already owns its idempotency key."""
+
+    if job_data.idempotency_key is None:
+        job = add_job(session, job_data)
+        await session.flush()
+        return job, True
+
+    statement = (
+        insert(Job)
+        .values(
+            id=uuid.uuid4(),
+            queue=job_data.queue,
+            task_name=job_data.task_name,
+            payload=job_data.payload,
+            status=JobStatus.QUEUED,
+            priority=job_data.priority,
+            idempotency_key=job_data.idempotency_key,
+            attempt_count=0,
+            max_attempts=job_data.max_attempts,
+        )
+        # PostgreSQL resolves concurrent submissions through the unique constraint.
+        .on_conflict_do_nothing(
+            constraint="uq_jobs_idempotency_key",
+        )
+        .returning(Job)
+    )
+
+    created_job = await session.scalar(statement)
+
+    if created_job is not None:
+        return created_job, True
+
+    existing_statement = select(Job).where(Job.idempotency_key == job_data.idempotency_key)
+    existing_job = await session.scalar(existing_statement)
+
+    if existing_job is None:
+        raise RuntimeError("Idempotency conflict occurred but the existing job was not found")
+
+    return existing_job, False
 
 
 async def get_job_by_id(

@@ -3,8 +3,28 @@ import uuid
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from job_system.models import Job, JobStatus
-from job_system.repository import add_job, get_job_by_id, list_jobs
+from job_system.repository import (
+    create_or_get_idempotent_job,
+    get_job_by_id,
+    list_jobs,
+)
 from job_system.schemas import JobCreate
+
+
+class IdempotencyConflictError(Exception):
+    """Raised when one idempotency key is reused for different work."""
+
+
+def job_matches_submission(job: Job, job_data: JobCreate) -> bool:
+    """Check whether an existing job represents the repeated submission."""
+
+    return (
+        job.queue == job_data.queue
+        and job.task_name == job_data.task_name
+        and job.payload == job_data.payload
+        and job.priority == job_data.priority
+        and job.max_attempts == job_data.max_attempts
+    )
 
 
 class JobService:
@@ -14,12 +34,20 @@ class JobService:
         self._session = session
 
     async def create_job(self, job_data: JobCreate) -> Job:
-        # The transaction commits only when every operation inside succeeds.
-        async with self._session.begin():
-            job = add_job(self._session, job_data)
-            await self._session.flush()
+        """Create a job or safely reuse an idempotent submission."""
 
-        # Refresh guarantees that database-generated timestamps are available.
+        async with self._session.begin():
+            job, created = await create_or_get_idempotent_job(
+                self._session,
+                job_data,
+            )
+
+            if not created and not job_matches_submission(job, job_data):
+                raise IdempotencyConflictError(
+                    "Idempotency key is already associated with a different job submission"
+                )
+
+        # Refresh guarantees that database-generated fields are available.
         await self._session.refresh(job)
         return job
 
