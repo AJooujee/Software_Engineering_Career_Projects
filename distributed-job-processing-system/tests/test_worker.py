@@ -1,5 +1,6 @@
 """Tests for worker success and failure processing paths."""
 
+import asyncio
 from typing import Any
 from uuid import UUID, uuid4
 
@@ -15,6 +16,10 @@ class FakeJobQueue:
     def __init__(self) -> None:
         self.succeeded_jobs: list[dict[str, Any]] = []
         self.failed_jobs: list[dict[str, Any]] = []
+        self.renewed_jobs: list[dict[str, Any]] = []
+        self.recovery_limits: list[int] = []
+        self.lease_renewed = asyncio.Event()
+        self.recovery_completed = asyncio.Event()
 
     async def mark_succeeded(
         self,
@@ -58,6 +63,36 @@ class FakeJobQueue:
         )
         return JobStatus.DEAD_LETTERED
 
+    async def renew_lease(
+        self,
+        *,
+        job_id: UUID,
+        worker_id: str,
+        lease_duration_seconds: float,
+    ) -> bool:
+        """Record one heartbeat lease renewal."""
+
+        self.renewed_jobs.append(
+            {
+                "job_id": job_id,
+                "worker_id": worker_id,
+                "lease_duration_seconds": lease_duration_seconds,
+            }
+        )
+        self.lease_renewed.set()
+        return True
+
+    async def recover_stale_jobs(
+        self,
+        *,
+        limit: int,
+    ) -> tuple[int, int]:
+        """Record one stale-job recovery scan."""
+
+        self.recovery_limits.append(limit)
+        self.recovery_completed.set()
+        return 1, 1
+
 
 class FakeJob:
     """Provide only the job attributes required by JobWorker."""
@@ -84,6 +119,9 @@ def create_worker(queue: FakeJobQueue) -> JobWorker:
         poll_interval_seconds=0.01,
         retry_base_delay_seconds=5.0,
         retry_max_delay_seconds=300.0,
+        lease_duration_seconds=30.0,
+        heartbeat_interval_seconds=5.0,
+        recovery_interval_seconds=10.0,
     )
 
 
@@ -172,3 +210,44 @@ async def test_worker_marks_temporary_error_as_retryable(
     assert queue.failed_jobs[0]["retryable"] is True
     assert queue.failed_jobs[0]["retry_base_delay_seconds"] == 5.0
     assert queue.failed_jobs[0]["retry_max_delay_seconds"] == 300.0
+
+
+async def test_worker_renews_active_job_lease() -> None:
+    queue = FakeJobQueue()
+    worker = create_worker(queue)
+    worker.heartbeat_interval_seconds = 0.001
+    job_id = uuid4()
+    stop_event = asyncio.Event()
+
+    heartbeat_task = asyncio.create_task(worker._maintain_lease(job_id, stop_event))
+
+    await asyncio.wait_for(
+        queue.lease_renewed.wait(),
+        timeout=1,
+    )
+    stop_event.set()
+    await heartbeat_task
+
+    assert queue.renewed_jobs == [
+        {
+            "job_id": job_id,
+            "worker_id": "test-worker",
+            "lease_duration_seconds": 30.0,
+        }
+    ]
+
+
+async def test_worker_runs_stale_job_recovery() -> None:
+    queue = FakeJobQueue()
+    worker = create_worker(queue)
+
+    recovery_task = asyncio.create_task(worker._run_recovery_loop())
+
+    await asyncio.wait_for(
+        queue.recovery_completed.wait(),
+        timeout=1,
+    )
+    worker.request_stop()
+    await recovery_task
+
+    assert queue.recovery_limits == [100]

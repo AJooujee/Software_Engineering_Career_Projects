@@ -4,7 +4,7 @@ import asyncio
 import logging
 import os
 import socket
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 from job_system.config import get_settings
 from job_system.db import SessionFactory
@@ -28,6 +28,9 @@ class JobWorker:
         poll_interval_seconds: float,
         retry_base_delay_seconds: float,
         retry_max_delay_seconds: float,
+        lease_duration_seconds: float,
+        heartbeat_interval_seconds: float,
+        recovery_interval_seconds: float,
     ) -> None:
         self.queue = queue
         self.worker_id = worker_id
@@ -36,6 +39,9 @@ class JobWorker:
         self.poll_interval_seconds = poll_interval_seconds
         self.retry_base_delay_seconds = retry_base_delay_seconds
         self.retry_max_delay_seconds = retry_max_delay_seconds
+        self.lease_duration_seconds = lease_duration_seconds
+        self.heartbeat_interval_seconds = heartbeat_interval_seconds
+        self.recovery_interval_seconds = recovery_interval_seconds
         self._stop_event = asyncio.Event()
 
     def request_stop(self) -> None:
@@ -56,6 +62,10 @@ class JobWorker:
 
         # Each slot independently claims and processes one job at a time.
         async with asyncio.TaskGroup() as task_group:
+            task_group.create_task(
+                self._run_recovery_loop(),
+                name="worker-recovery",
+            )
             for slot_number in range(1, self.concurrency + 1):
                 task_group.create_task(
                     self._run_slot(slot_number),
@@ -63,6 +73,35 @@ class JobWorker:
                 )
 
         logger.info("Worker %s stopped", self.worker_id)
+
+    async def _run_recovery_loop(self) -> None:
+        """Periodically recover jobs abandoned by inactive workers."""
+
+        logger.info("Worker recovery loop started")
+
+        while not self._stop_event.is_set():
+            try:
+                retry_count, dead_letter_count = await self.queue.recover_stale_jobs(limit=100)
+
+                if retry_count or dead_letter_count:
+                    logger.info(
+                        "Recovered stale jobs: %s retry scheduled, %s dead lettered",
+                        retry_count,
+                        dead_letter_count,
+                    )
+            except Exception:
+                # Recovery failure must not terminate active worker slots.
+                logger.exception("Could not recover stale jobs")
+
+            try:
+                await asyncio.wait_for(
+                    self._stop_event.wait(),
+                    timeout=self.recovery_interval_seconds,
+                )
+            except TimeoutError:
+                pass
+
+        logger.info("Worker recovery loop stopped")
 
     async def _run_slot(self, slot_number: int) -> None:
         """Continuously claim and execute jobs for one concurrency slot."""
@@ -75,6 +114,7 @@ class JobWorker:
                     worker_id=self.worker_id,
                     queues=self.queue_names,
                     limit=1,
+                    lease_duration_seconds=self.lease_duration_seconds,
                 )
             except Exception:
                 # A temporary database error must not terminate the whole worker.
@@ -90,6 +130,44 @@ class JobWorker:
 
         logger.info("Worker slot %s stopped", slot_number)
 
+    async def _maintain_lease(
+        self,
+        job_id: UUID,
+        stop_event: asyncio.Event,
+    ) -> None:
+        """Periodically renew ownership while a job handler is still running."""
+
+        while not stop_event.is_set():
+            try:
+                await asyncio.wait_for(
+                    stop_event.wait(),
+                    timeout=self.heartbeat_interval_seconds,
+                )
+            except TimeoutError:
+                pass
+
+            if stop_event.is_set():
+                return
+
+            try:
+                renewed = await self.queue.renew_lease(
+                    job_id=job_id,
+                    worker_id=self.worker_id,
+                    lease_duration_seconds=self.lease_duration_seconds,
+                )
+            except Exception:
+                # A temporary database failure may recover before the lease expires.
+                logger.exception("Could not renew the lease for job %s", job_id)
+                continue
+
+            if not renewed:
+                logger.warning(
+                    "Worker %s lost ownership of job %s",
+                    self.worker_id,
+                    job_id,
+                )
+                return
+
     async def _process_job(self, job: Job, slot_number: int) -> None:
         """Execute one claimed job and persist its final state."""
 
@@ -98,6 +176,12 @@ class JobWorker:
             slot_number,
             job.id,
             job.task_name,
+        )
+
+        heartbeat_stop_event = asyncio.Event()
+        heartbeat_task = asyncio.create_task(
+            self._maintain_lease(job.id, heartbeat_stop_event),
+            name=f"job-heartbeat-{job.id}",
         )
 
         try:
@@ -152,6 +236,10 @@ class JobWorker:
                     "Worker could not persist the failure state for job %s",
                     job.id,
                 )
+            finally:
+                # Stop the heartbeat immediately after execution and persistence finish.
+                heartbeat_stop_event.set()
+                await heartbeat_task
 
     async def _wait_before_polling(self) -> None:
         """Wait for new work while allowing prompt graceful shutdown."""
@@ -189,6 +277,9 @@ async def run_worker() -> None:
         poll_interval_seconds=settings.worker_poll_interval_seconds,
         retry_base_delay_seconds=settings.worker_retry_base_delay_seconds,
         retry_max_delay_seconds=settings.worker_retry_max_delay_seconds,
+        lease_duration_seconds=settings.worker_lease_duration_seconds,
+        heartbeat_interval_seconds=settings.worker_heartbeat_interval_seconds,
+        recovery_interval_seconds=settings.worker_recovery_interval_seconds,
     )
 
     worker_task = asyncio.create_task(worker.run())

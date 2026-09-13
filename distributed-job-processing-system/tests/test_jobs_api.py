@@ -53,6 +53,8 @@ class FakeJobService:
             max_attempts=job_data.max_attempts,
             available_at=now,
             worker_id=None,
+            lease_expires_at=None,
+            heartbeat_at=None,
             result=None,
             last_error=None,
             started_at=None,

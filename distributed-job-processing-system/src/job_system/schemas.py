@@ -70,6 +70,8 @@ class JobRead(BaseModel):
     max_attempts: int
     available_at: datetime
     worker_id: str | None
+    lease_expires_at: datetime | None
+    heartbeat_at: datetime | None
     result: dict[str, Any] | None
     last_error: str | None
     started_at: datetime | None
