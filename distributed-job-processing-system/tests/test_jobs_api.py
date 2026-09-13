@@ -11,6 +11,7 @@ from job_system.models import Job, JobStatus
 from job_system.schemas import JobCreate
 from job_system.services import (
     IdempotencyConflictError,
+    JobSubmissionResult,
     job_matches_submission,
 )
 
@@ -21,7 +22,10 @@ class FakeJobService:
     def __init__(self) -> None:
         self.jobs: dict[uuid.UUID, Job] = {}
 
-    async def create_job(self, job_data: JobCreate) -> Job:
+    async def create_job(
+        self,
+        job_data: JobCreate,
+    ) -> JobSubmissionResult:
         if job_data.idempotency_key is not None:
             existing_job = next(
                 (
@@ -38,7 +42,7 @@ class FakeJobService:
                         "Idempotency key is already associated with a different job submission"
                     )
 
-                return existing_job
+                return JobSubmissionResult(job=existing_job, created=False)
         now = datetime.now(UTC)
 
         job = Job(
@@ -64,7 +68,10 @@ class FakeJobService:
         )
 
         self.jobs[job.id] = job
-        return job
+        return JobSubmissionResult(
+            job=job,
+            created=True,
+        )
 
     async def get_job(self, job_id: uuid.UUID) -> Job | None:
         return self.jobs.get(job_id)
@@ -322,3 +329,41 @@ async def test_submissions_without_idempotency_key_create_distinct_jobs(
     assert second_response.status_code == 201
     assert first_response.json()["id"] != second_response.json()["id"]
     assert len(fake_job_service.jobs) == 2
+
+
+async def test_job_submission_metrics_record_all_outcomes(
+    client: AsyncClient,
+    fake_job_service: FakeJobService,
+) -> None:
+    request_payload = {
+        "task_name": "generate-report",
+        "priority": 10,
+        "idempotency_key": "metrics-submission",
+    }
+
+    created_response = await client.post(
+        "/jobs",
+        json=request_payload,
+    )
+    replayed_response = await client.post(
+        "/jobs",
+        json=request_payload,
+    )
+    conflict_response = await client.post(
+        "/jobs",
+        json={
+            **request_payload,
+            "priority": 20,
+        },
+    )
+
+    assert created_response.status_code == 201
+    assert replayed_response.status_code == 201
+    assert conflict_response.status_code == 409
+
+    metrics_response = await client.get("/metrics")
+    metrics_text = metrics_response.text
+
+    assert 'job_system_jobs_submitted_total{outcome="created"}' in metrics_text
+    assert 'job_system_jobs_submitted_total{outcome="replayed"}' in metrics_text
+    assert 'job_system_jobs_submitted_total{outcome="conflict"}' in metrics_text

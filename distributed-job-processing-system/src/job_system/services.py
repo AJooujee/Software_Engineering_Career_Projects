@@ -1,4 +1,5 @@
 import uuid
+from dataclasses import dataclass
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -9,6 +10,14 @@ from job_system.repository import (
     list_jobs,
 )
 from job_system.schemas import JobCreate
+
+
+@dataclass(frozen=True, slots=True)
+class JobSubmissionResult:
+    """Describe the stored job and whether this request created it."""
+
+    job: Job
+    created: bool
 
 
 class IdempotencyConflictError(Exception):
@@ -33,7 +42,10 @@ class JobService:
     def __init__(self, session: AsyncSession) -> None:
         self._session = session
 
-    async def create_job(self, job_data: JobCreate) -> Job:
+    async def create_job(
+        self,
+        job_data: JobCreate,
+    ) -> JobSubmissionResult:
         """Create a job or safely reuse an idempotent submission."""
 
         async with self._session.begin():
@@ -49,7 +61,10 @@ class JobService:
 
         # Refresh guarantees that database-generated fields are available.
         await self._session.refresh(job)
-        return job
+        return JobSubmissionResult(
+            job=job,
+            created=created,
+        )
 
     async def get_job(self, job_id: uuid.UUID) -> Job | None:
         return await get_job_by_id(self._session, job_id)

@@ -7,6 +7,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from job_system.db import get_session
 from job_system.models import JobStatus
+from job_system.observability import JOBS_SUBMITTED_TOTAL
 from job_system.schemas import JobCreate, JobRead
 from job_system.services import IdempotencyConflictError, JobService
 
@@ -42,14 +43,18 @@ async def create_job(
     """Persist a new job with queued status."""
 
     try:
-        job = await service.create_job(job_data)
+        submission = await service.create_job(job_data)
     except IdempotencyConflictError as exc:
+        JOBS_SUBMITTED_TOTAL.labels(outcome="conflict").inc()
         raise HTTPException(
             status_code=http_status.HTTP_409_CONFLICT,
             detail=str(exc),
         ) from exc
 
-    return JobRead.model_validate(job)
+    outcome = "created" if submission.created else "replayed"
+    JOBS_SUBMITTED_TOTAL.labels(outcome=outcome).inc()
+
+    return JobRead.model_validate(submission.job)
 
 
 @router.get(

@@ -2,8 +2,8 @@
 
 A portfolio-grade distributed job queue built with Python, FastAPI, PostgreSQL, and SQLAlchemy.
 
-**Current version:** `0.6.0`
-**Current status:** Phase 6 of 8 completed
+**Current version:** `0.7.0`
+**Current status:** Phase 7 of 8 completed
 
 ## Overview
 
@@ -11,7 +11,7 @@ This project demonstrates how a durable background job-processing platform is de
 
 Failed jobs are classified as retryable or non-retryable. Retryable jobs use scheduled exponential backoff and transition to the dead-letter queue after exhausting their configured attempts.
 
-Future phases will add idempotency, fault recovery, observability, and production-readiness features.
+The system now includes idempotent submissions, worker fault recovery, Prometheus metrics, and structured JSON logging. The final phase will focus on production readiness.
 
 ## Architecture
 
@@ -99,6 +99,21 @@ flowchart TD
 - Validation that heartbeat intervals are shorter than lease durations
 - PostgreSQL validation of retry recovery and terminal recovery paths
 
+### Phase 7 - Observability
+
+- Prometheus-compatible metrics for API and worker processes
+- API metrics exposed through `GET /metrics`
+- Dedicated worker metrics server on a configurable port
+- Job submission counters for created, replayed, and conflicting requests
+- Worker counters for claimed jobs and persisted lifecycle transitions
+- Lease-renewal metrics for renewed, lost, and error outcomes
+- Stale-job recovery counters for retry and dead-letter outcomes
+- Job-processing duration histogram
+- Structured JSON logging with timestamps, severity, and event context
+- Job, worker, task, slot, and status fields for lifecycle logs
+- Automated tests for metrics and structured log output
+- End-to-end validation using a live API, worker, and PostgreSQL
+
 ## API Endpoints
 
 | Method | Endpoint | Description |
@@ -106,6 +121,7 @@ flowchart TD
 | `GET` | `/` | Return service information |
 | `GET` | `/health/live` | Confirm that the API process is running |
 | `GET` | `/health/ready` | Confirm PostgreSQL connectivity |
+| `GET` | `/metrics` | Expose API metrics in Prometheus text format |
 | `POST` | `/jobs` | Create and persist a queued job |
 | `GET` | `/jobs` | List jobs with filtering and pagination |
 | `GET` | `/jobs/{job_id}` | Retrieve one job by UUID |
@@ -159,7 +175,9 @@ JOB_WORKER_RETRY_MAX_DELAY_SECONDS=300
 JOB_WORKER_LEASE_DURATION_SECONDS=30
 JOB_WORKER_HEARTBEAT_INTERVAL_SECONDS=5
 JOB_WORKER_RECOVERY_INTERVAL_SECONDS=10
+JOB_WORKER_METRICS_PORT=9000
 ```
+The API exposes Prometheus metrics at `http://127.0.0.1:8000/metrics`. Each worker exposes its own process metrics at `http://127.0.0.1:9000/metrics` by default.
 
 ### 3. Start PostgreSQL
 
@@ -198,6 +216,8 @@ job-worker
 
 The worker consumes jobs from the configured queues and processes up to four jobs concurrently by default. Press `Ctrl+C` to stop claiming new jobs and allow active jobs to finish.
 
+Worker logs are emitted as structured JSON. The worker metrics server runs independently from the API metrics endpoint and uses port `9000` by default.
+
 ### 7. Stop local services
 
 ```powershell
@@ -216,7 +236,7 @@ alembic check
 docker compose config --quiet
 ```
 
-Current automated test count: **38**
+Current automated test count: **42**
 
 ## Project Structure
 
@@ -242,6 +262,7 @@ distributed-job-processing-system/
 |       |-- handlers.py
 |       |-- main.py
 |       |-- models.py
+|       |-- observability.py
 |       |-- queue.py
 |       |-- repository.py
 |       |-- schemas.py
@@ -253,6 +274,7 @@ distributed-job-processing-system/
 |   |-- test_handlers.py
 |   |-- test_health.py
 |   |-- test_jobs_api.py
+|   |-- test_observability.py
 |   |-- test_queue.py
 |   `-- test_worker.py
 |-- .env.example
@@ -271,7 +293,7 @@ distributed-job-processing-system/
 - [x] Phase 4 - Retry and Dead-Letter Queue
 - [x] Phase 5 - Idempotency
 - [x] Phase 6 - Fault Recovery
-- [ ] Phase 7 - Observability
+- [x] Phase 7 - Observability
 - [ ] Phase 8 - Production Readiness
 
 ## Author

@@ -1,12 +1,14 @@
 """Tests for worker success and failure processing paths."""
 
 import asyncio
+import logging
 from typing import Any
 from uuid import UUID, uuid4
 
 import pytest
 
 from job_system.models import JobStatus
+from job_system.observability import render_metrics
 from job_system.worker import JobWorker
 
 
@@ -139,6 +141,11 @@ async def test_worker_marks_successful_job() -> None:
 
     # Directly test one processing cycle without starting an infinite poll loop.
     await worker._process_job(job, slot_number=1)  # type: ignore[arg-type]
+    heartbeat_task_name = f"job-heartbeat-{job.id}"
+
+    assert not any(
+        task.get_name() == heartbeat_task_name and not task.done() for task in asyncio.all_tasks()
+    )
 
     assert queue.failed_jobs == []
     assert queue.succeeded_jobs == [
@@ -152,6 +159,11 @@ async def test_worker_marks_successful_job() -> None:
             },
         }
     ]
+    metrics_content, _ = render_metrics()
+    metrics_text = metrics_content.decode()
+
+    assert 'job_system_job_transitions_total{status="succeeded"}' in metrics_text
+    assert "job_system_job_processing_seconds_count " in metrics_text
 
 
 async def test_worker_marks_failed_job() -> None:
@@ -235,6 +247,9 @@ async def test_worker_renews_active_job_lease() -> None:
             "lease_duration_seconds": 30.0,
         }
     ]
+    metrics_content, _ = render_metrics()
+
+    assert 'job_system_lease_renewals_total{outcome="renewed"}' in metrics_content.decode()
 
 
 async def test_worker_runs_stale_job_recovery() -> None:
@@ -251,3 +266,41 @@ async def test_worker_runs_stale_job_recovery() -> None:
     await recovery_task
 
     assert queue.recovery_limits == [100]
+    metrics_content, _ = render_metrics()
+    metrics_text = metrics_content.decode()
+
+    assert 'job_system_stale_job_recoveries_total{outcome="retry_scheduled"}' in metrics_text
+    assert 'job_system_stale_job_recoveries_total{outcome="dead_lettered"}' in metrics_text
+
+
+async def test_worker_logs_structured_job_context(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    queue = FakeJobQueue()
+    worker = create_worker(queue)
+    job = FakeJob(
+        task_name="generate-report",
+        payload={
+            "report_id": "logging-test",
+            "delay_seconds": 0,
+        },
+    )
+
+    with caplog.at_level(
+        logging.INFO,
+        logger="job_system.worker",
+    ):
+        await worker._process_job(
+            job,
+            slot_number=1,
+        )  # type: ignore[arg-type]
+
+    succeeded_record = next(
+        record for record in caplog.records if getattr(record, "event", None) == "job_succeeded"
+    )
+
+    assert succeeded_record.job_id == str(job.id)
+    assert succeeded_record.worker_id == "test-worker"
+    assert succeeded_record.task_name == "generate-report"
+    assert succeeded_record.slot_number == 1
+    assert succeeded_record.status == JobStatus.SUCCEEDED.value
