@@ -1,6 +1,7 @@
 from functools import lru_cache
+from typing import Self
 
-from pydantic import Field
+from pydantic import Field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -38,6 +39,36 @@ class Settings(BaseSettings):
         ge=0,
         le=86400,
     )
+
+    # Duration of worker ownership before a missing heartbeat makes it stale.
+    worker_lease_duration_seconds: float = Field(
+        default=30.0,
+        gt=0,
+        le=3600,
+    )
+
+    # Frequency used to renew leases for actively running jobs.
+    worker_heartbeat_interval_seconds: float = Field(
+        default=5.0,
+        gt=0,
+        le=300,
+    )
+
+    # Frequency used to scan for jobs abandoned by crashed workers.
+    worker_recovery_interval_seconds: float = Field(
+        default=10.0,
+        gt=0,
+        le=300,
+    )
+
+    @model_validator(mode="after")
+    def validate_worker_lease_intervals(self) -> Self:
+        """Ensure active workers renew their leases before expiration."""
+
+        if self.worker_heartbeat_interval_seconds >= self.worker_lease_duration_seconds:
+            raise ValueError("worker heartbeat interval must be shorter than worker lease duration")
+
+        return self
 
     @property
     def worker_queue_names(self) -> tuple[str, ...]:

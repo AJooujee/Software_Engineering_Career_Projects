@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "distributed-job-processing-system"
-version = "0.5.0"
+version = "0.6.0"
 description = "A distributed job queue with concurrent workers, retries, idempotency, and fault recovery."
 readme = "README.md"
 requires-python = ">=3.12"

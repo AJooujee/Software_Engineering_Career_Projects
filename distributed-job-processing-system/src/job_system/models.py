@@ -63,6 +63,11 @@ class Job(Base):
             "status",
             "available_at",
         ),
+        Index(
+            "ix_jobs_status_lease_expires_at",
+            "status",
+            "lease_expires_at",
+        ),
     )
 
     # Job identity and submitted work.
@@ -148,6 +153,18 @@ class Job(Base):
         nullable=True,
     )
     completed_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
+    )
+
+    # A worker may update the job only while its ownership lease is active.
+    lease_expires_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
+    )
+
+    # Workers periodically update this timestamp while processing.
+    heartbeat_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True),
         nullable=True,
     )

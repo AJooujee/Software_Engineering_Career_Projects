@@ -2,8 +2,8 @@
 
 A portfolio-grade distributed job queue built with Python, FastAPI, PostgreSQL, and SQLAlchemy.
 
-**Current version:** `0.5.0`
-**Current status:** Phase 5 of 8 completed
+**Current version:** `0.6.0`
+**Current status:** Phase 6 of 8 completed
 
 ## Overview
 
@@ -86,6 +86,19 @@ flowchart TD
 - Request validation for idempotency-key length and format
 - API and PostgreSQL concurrency validation
 
+### Phase 6 - Fault Recovery
+
+- Time-limited worker ownership using database-backed leases
+- Periodic heartbeats that renew leases for actively running jobs
+- Configurable lease, heartbeat, and recovery intervals
+- Automatic detection of jobs abandoned by crashed workers
+- Atomic stale-job recovery with `FOR UPDATE SKIP LOCKED`
+- Immediate retry scheduling when execution attempts remain
+- Automatic dead-lettering after all attempts are exhausted
+- Protection against result updates from workers that lost ownership
+- Validation that heartbeat intervals are shorter than lease durations
+- PostgreSQL validation of retry recovery and terminal recovery paths
+
 ## API Endpoints
 
 | Method | Endpoint | Description |
@@ -109,7 +122,7 @@ flowchart TD
     "format": "pdf"
   },
   "priority": 10,
-  "max_attempts": 3
+  "max_attempts": 3,
   "idempotency_key": "report-sales-2026-09"
 }
 ```
@@ -143,6 +156,9 @@ JOB_WORKER_CONCURRENCY=4
 JOB_WORKER_POLL_INTERVAL_SECONDS=0.5
 JOB_WORKER_RETRY_BASE_DELAY_SECONDS=5
 JOB_WORKER_RETRY_MAX_DELAY_SECONDS=300
+JOB_WORKER_LEASE_DURATION_SECONDS=30
+JOB_WORKER_HEARTBEAT_INTERVAL_SECONDS=5
+JOB_WORKER_RECOVERY_INTERVAL_SECONDS=10
 ```
 
 ### 3. Start PostgreSQL
@@ -200,7 +216,7 @@ alembic check
 docker compose config --quiet
 ```
 
-Current automated test count: **34**
+Current automated test count: **38**
 
 ## Project Structure
 
@@ -210,8 +226,9 @@ distributed-job-processing-system/
 |   |-- versions/
 |   |   |-- b63bc8dd8717_create_jobs_table.py
 |   |   |-- ab243a2532b3_add_worker_processing_fields.py
-|   |   `-- f233f5d3a0fd_add_retry_scheduling_fields.py
-|   |   `-- b5f3b0955c95_add_job_idempotency_key.py
+|   |   |-- f233f5d3a0fd_add_retry_scheduling_fields.py
+|   |   |-- b5f3b0955c95_add_job_idempotency_key.py
+|   |   `-- 5bb6c4b76aca_add_worker_lease_fields.py
 |   |-- env.py
 |   `-- script.py.mako
 |-- src/
@@ -232,6 +249,7 @@ distributed-job-processing-system/
 |       `-- worker.py
 |-- tests/
 |   |-- conftest.py
+|   |-- test_config.py
 |   |-- test_handlers.py
 |   |-- test_health.py
 |   |-- test_jobs_api.py
@@ -252,7 +270,7 @@ distributed-job-processing-system/
 - [x] Phase 3 - Workers and Concurrency
 - [x] Phase 4 - Retry and Dead-Letter Queue
 - [x] Phase 5 - Idempotency
-- [ ] Phase 6 - Fault Recovery
+- [x] Phase 6 - Fault Recovery
 - [ ] Phase 7 - Observability
 - [ ] Phase 8 - Production Readiness
 
