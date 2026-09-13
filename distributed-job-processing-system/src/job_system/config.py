@@ -60,6 +60,12 @@ class Settings(BaseSettings):
         gt=0,
         le=300,
     )
+    # HTTP port where each worker exposes its Prometheus metrics.
+    worker_metrics_port: int = Field(
+        default=9000,
+        ge=1,
+        le=65535,
+    )
 
     @model_validator(mode="after")
     def validate_worker_lease_intervals(self) -> Self:

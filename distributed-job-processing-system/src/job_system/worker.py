@@ -4,12 +4,22 @@ import asyncio
 import logging
 import os
 import socket
+from time import perf_counter
 from uuid import UUID, uuid4
 
 from job_system.config import get_settings
 from job_system.db import SessionFactory
 from job_system.handlers import TaskHandlerError, execute_task
-from job_system.models import Job
+from job_system.models import Job, JobStatus
+from job_system.observability import (
+    JOB_PROCESSING_SECONDS,
+    JOB_TRANSITIONS_TOTAL,
+    JOBS_CLAIMED_TOTAL,
+    LEASE_RENEWALS_TOTAL,
+    STALE_JOB_RECOVERIES_TOTAL,
+    configure_logging,
+    start_metrics_server,
+)
 from job_system.queue import PostgresJobQueue
 
 logger = logging.getLogger(__name__)
@@ -89,6 +99,13 @@ class JobWorker:
                         retry_count,
                         dead_letter_count,
                     )
+                if retry_count:
+                    STALE_JOB_RECOVERIES_TOTAL.labels(outcome="retry_scheduled").inc(retry_count)
+
+                if dead_letter_count:
+                    STALE_JOB_RECOVERIES_TOTAL.labels(outcome="dead_lettered").inc(
+                        dead_letter_count
+                    )
             except Exception:
                 # Recovery failure must not terminate active worker slots.
                 logger.exception("Could not recover stale jobs")
@@ -125,6 +142,7 @@ class JobWorker:
             if not jobs:
                 await self._wait_before_polling()
                 continue
+            JOBS_CLAIMED_TOTAL.inc(len(jobs))
 
             await self._process_job(jobs[0], slot_number)
 
@@ -156,9 +174,13 @@ class JobWorker:
                     lease_duration_seconds=self.lease_duration_seconds,
                 )
             except Exception:
+                LEASE_RENEWALS_TOTAL.labels(outcome="error").inc()
                 # A temporary database failure may recover before the lease expires.
                 logger.exception("Could not renew the lease for job %s", job_id)
                 continue
+
+            lease_outcome = "renewed" if renewed else "lost"
+            LEASE_RENEWALS_TOTAL.labels(outcome=lease_outcome).inc()
 
             if not renewed:
                 logger.warning(
@@ -171,11 +193,20 @@ class JobWorker:
     async def _process_job(self, job: Job, slot_number: int) -> None:
         """Execute one claimed job and persist its final state."""
 
+        processing_started_at = perf_counter()
         logger.info(
             "Worker slot %s processing job %s (%s)",
             slot_number,
             job.id,
             job.task_name,
+            extra={
+                "event": "job_processing_started",
+                "job_id": str(job.id),
+                "worker_id": self.worker_id,
+                "task_name": job.task_name,
+                "slot_number": slot_number,
+                "status": JobStatus.RUNNING.value,
+            },
         )
 
         heartbeat_stop_event = asyncio.Event()
@@ -194,7 +225,19 @@ class JobWorker:
             )
 
             if updated:
-                logger.info("Job %s succeeded", job.id)
+                JOB_TRANSITIONS_TOTAL.labels(status=JobStatus.SUCCEEDED.value).inc()
+                logger.info(
+                    "Job %s succeeded",
+                    job.id,
+                    extra={
+                        "event": "job_succeeded",
+                        "job_id": str(job.id),
+                        "worker_id": self.worker_id,
+                        "task_name": job.task_name,
+                        "slot_number": slot_number,
+                        "status": JobStatus.SUCCEEDED.value,
+                    },
+                )
             else:
                 logger.warning(
                     "Job %s could not be marked succeeded because ownership changed",
@@ -204,7 +247,17 @@ class JobWorker:
             # Cancellation must remain cancellation instead of becoming job failure.
             raise
         except Exception as exc:
-            logger.exception("Job %s failed", job.id)
+            logger.exception(
+                "Job %s failed",
+                job.id,
+                extra={
+                    "event": "job_execution_failed",
+                    "job_id": str(job.id),
+                    "worker_id": self.worker_id,
+                    "task_name": job.task_name,
+                    "slot_number": slot_number,
+                },
+            )
 
             try:
                 resulting_status = await self.queue.mark_failed(
@@ -224,22 +277,30 @@ class JobWorker:
                         job.id,
                     )
                 else:
+                    JOB_TRANSITIONS_TOTAL.labels(status=resulting_status.value).inc()
                     logger.info(
                         "Job %s transitioned to %s",
                         job.id,
                         resulting_status.value,
+                        extra={
+                            "event": "job_transitioned",
+                            "job_id": str(job.id),
+                            "worker_id": self.worker_id,
+                            "task_name": job.task_name,
+                            "slot_number": slot_number,
+                            "status": resulting_status.value,
+                        },
                     )
             except Exception:
-                # Persistence errors are isolated to this job so that the other
-                # worker slots can continue processing available jobs.
                 logger.exception(
                     "Worker could not persist the failure state for job %s",
                     job.id,
                 )
-            finally:
-                # Stop the heartbeat immediately after execution and persistence finish.
-                heartbeat_stop_event.set()
-                await heartbeat_task
+        finally:
+            # Stop the heartbeat after execution and persistence finish.
+            heartbeat_stop_event.set()
+            await heartbeat_task
+            JOB_PROCESSING_SECONDS.observe(perf_counter() - processing_started_at)
 
     async def _wait_before_polling(self) -> None:
         """Wait for new work while allowing prompt graceful shutdown."""
@@ -267,6 +328,9 @@ async def run_worker() -> None:
     """Configure and run one worker process."""
 
     settings = get_settings()
+    start_metrics_server(
+        port=settings.worker_metrics_port,
+    )
     queue = PostgresJobQueue(SessionFactory)
 
     worker = JobWorker(
@@ -296,10 +360,7 @@ async def run_worker() -> None:
 def main() -> None:
     """Start the worker from the command line."""
 
-    logging.basicConfig(
-        level=logging.INFO,
-        format="%(asctime)s | %(levelname)s | %(name)s | %(message)s",
-    )
+    configure_logging()
 
     try:
         asyncio.run(run_worker())

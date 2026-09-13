@@ -2,7 +2,7 @@ from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from typing import Literal
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Response
 from fastapi import status as http_status
 from pydantic import BaseModel
 from sqlalchemy.exc import SQLAlchemyError
@@ -10,6 +10,7 @@ from sqlalchemy.exc import SQLAlchemyError
 from job_system import __version__
 from job_system.api.jobs import router as jobs_router
 from job_system.db import check_database_connection, close_database_connection
+from job_system.observability import configure_logging, render_metrics
 
 
 class ServiceInfo(BaseModel):
@@ -28,6 +29,7 @@ class HealthResponse(BaseModel):
 async def lifespan(_: FastAPI) -> AsyncIterator[None]:
     """Release database connections during graceful application shutdown."""
 
+    configure_logging()
     yield
     await close_database_connection()
 
@@ -43,6 +45,21 @@ app = FastAPI(
 
 # Keep job endpoints in a separate router as the application grows.
 app.include_router(jobs_router)
+
+
+@app.get(
+    "/metrics",
+    response_class=Response,
+    include_in_schema=False,
+)
+async def metrics() -> Response:
+    """Expose application metrics in Prometheus text format."""
+
+    content, content_type = render_metrics()
+    return Response(
+        content=content,
+        headers={"Content-Type": content_type},
+    )
 
 
 @app.get("/", response_model=ServiceInfo, tags=["System"])
