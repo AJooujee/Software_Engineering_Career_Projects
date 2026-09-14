@@ -2,8 +2,8 @@
 
 A portfolio-grade distributed job queue built with Python, FastAPI, PostgreSQL, and SQLAlchemy.
 
-**Current version:** `0.7.0`
-**Current status:** Phase 7 of 8 completed
+**Current version:** `1.0.0`
+**Current status:** All 8 development phases completed
 
 ## Overview
 
@@ -11,7 +11,7 @@ This project demonstrates how a durable background job-processing platform is de
 
 Failed jobs are classified as retryable or non-retryable. Retryable jobs use scheduled exponential backoff and transition to the dead-letter queue after exhausting their configured attempts.
 
-The system now includes idempotent submissions, worker fault recovery, Prometheus metrics, and structured JSON logging. The final phase will focus on production readiness.
+The system now includes idempotent submissions, worker fault recovery, Prometheus metrics, structured JSON logging, hardened containers, automated CI validation, and production-oriented runtime safeguards.
 
 ## Architecture
 
@@ -114,6 +114,24 @@ flowchart TD
 - Automated tests for metrics and structured log output
 - End-to-end validation using a live API, worker, and PostgreSQL
 
+### Phase 8 - Production Readiness
+
+- Production Docker image based on Python 3.12 slim
+- Shared application image for API, worker, and database migrations
+- Non-root runtime using a dedicated UID and GID
+- Read-only container filesystems with temporary writable storage
+- Linux capability removal and `no-new-privileges` enforcement
+- One-shot migration service that completes before API and worker startup
+- Container health checks for PostgreSQL, API, and worker metrics
+- Configurable host ports for running alongside other local projects
+- Request correlation through validated `X-Request-ID` headers
+- Basic HTTP response hardening with `X-Content-Type-Options`
+- Development, test, and production environment modes
+- Production validation that rejects development passwords and SQL echo
+- Automated end-to-end smoke testing
+- GitHub Actions validation for Ruff, tests, Alembic, Docker, and Compose
+- Restart and full-stack recovery validation
+
 ## API Endpoints
 
 | Method | Endpoint | Description |
@@ -162,11 +180,25 @@ python -m pip install -e ".[dev]"
 Copy-Item .env.example .env
 ```
 
-The local PostgreSQL service uses port `5433` to avoid conflicts with other projects.
+The default local configuration uses the `development` environment. Production mode rejects the example development password and prevents SQL statement echoing.
 
-Worker settings can be configured through:
+The local PostgreSQL service uses port `5433`, and the Compose API uses port `8002`, to reduce conflicts with other development services.
+
+Runtime settings can be configured through:
 
 ```dotenv
+POSTGRES_DB=job_system
+POSTGRES_USER=job_user
+POSTGRES_PASSWORD=local_dev_password
+POSTGRES_PORT=5433
+API_PORT=8002
+
+JOB_ENVIRONMENT=development
+JOB_DATABASE_URL=postgresql+asyncpg://job_user:local_dev_password@localhost:5433/job_system
+JOB_DATABASE_ECHO=false
+JOB_DATABASE_POOL_SIZE=5
+JOB_DATABASE_MAX_OVERFLOW=10
+
 JOB_WORKER_QUEUES=default,reports,emails
 JOB_WORKER_CONCURRENCY=4
 JOB_WORKER_POLL_INTERVAL_SECONDS=0.5
@@ -177,7 +209,6 @@ JOB_WORKER_HEARTBEAT_INTERVAL_SECONDS=5
 JOB_WORKER_RECOVERY_INTERVAL_SECONDS=10
 JOB_WORKER_METRICS_PORT=9000
 ```
-The API exposes Prometheus metrics at `http://127.0.0.1:8000/metrics`. Each worker exposes its own process metrics at `http://127.0.0.1:9000/metrics` by default.
 
 ### 3. Start PostgreSQL
 
@@ -226,17 +257,51 @@ docker compose down
 
 The named Docker volume preserves PostgreSQL data between container restarts.
 
+## Production Compose Stack
+
+Build and start PostgreSQL, migrations, the API, and the worker:
+
+```powershell
+docker compose up --detach --build --wait --wait-timeout 180
+docker compose ps --all
+```
+
+The migration container must exit with code `0`. PostgreSQL, API, and worker containers must report a healthy status.
+
+With the example environment configuration:
+
+- API: `http://127.0.0.1:8002`
+- Swagger UI: `http://127.0.0.1:8002/docs`
+- API metrics: `http://127.0.0.1:8002/metrics`
+- Worker metrics: `http://127.0.0.1:9000/metrics`
+
+Run the end-to-end production smoke test:
+
+```powershell
+python .\scripts\ci_smoke.py `
+    --api-url http://127.0.0.1:8002 `
+    --worker-url http://127.0.0.1:9000
+```
+
+Stop the stack without deleting the PostgreSQL volume:
+
+```powershell
+docker compose down --remove-orphans
+```
+
 ## Quality Checks
 
 ```powershell
 ruff check .
 ruff format --check .
 pytest
+alembic current
 alembic check
 docker compose config --quiet
+python .\scripts\ci_smoke.py --api-url http://127.0.0.1:8002 --worker-url http://127.0.0.1:9000
 ```
 
-Current automated test count: **42**
+Current automated test count: **47**
 
 ## Project Structure
 
@@ -251,6 +316,8 @@ distributed-job-processing-system/
 |   |   `-- 5bb6c4b76aca_add_worker_lease_fields.py
 |   |-- env.py
 |   `-- script.py.mako
+|-- scripts/
+|   `-- ci_smoke.py
 |-- src/
 |   `-- job_system/
 |       |-- api/
@@ -277,13 +344,17 @@ distributed-job-processing-system/
 |   |-- test_observability.py
 |   |-- test_queue.py
 |   `-- test_worker.py
+|-- .dockerignore
 |-- .env.example
 |-- .gitignore
 |-- alembic.ini
 |-- compose.yaml
+|-- Dockerfile
 |-- pyproject.toml
 `-- README.md
 ```
+
+The repository-level workflow `.github/workflows/distributed-job-system-ci.yml` validates this project in GitHub Actions.
 
 ## Development Roadmap
 
@@ -294,7 +365,9 @@ distributed-job-processing-system/
 - [x] Phase 5 - Idempotency
 - [x] Phase 6 - Fault Recovery
 - [x] Phase 7 - Observability
-- [ ] Phase 8 - Production Readiness
+- [x] Phase 8 - Production Readiness
+
+Version `1.0.0` completes the planned implementation roadmap. Future changes will focus on maintenance, deployment targets, and optional platform extensions.
 
 ## Author
 
