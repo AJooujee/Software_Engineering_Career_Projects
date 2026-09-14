@@ -21,5 +21,108 @@ services:
       start_period: 5s
     restart: unless-stopped
 
+  migration:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: distributed-job-system:local
+    command:
+      - alembic
+      - upgrade
+      - head
+    environment:
+      JOB_ENVIRONMENT: ${JOB_ENVIRONMENT:-production}
+      JOB_DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    read_only: true
+    tmpfs:
+      - /tmp
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    restart: "no"
+
+  api:
+    image: distributed-job-system:local
+    environment:
+      JOB_DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
+      JOB_DATABASE_ECHO: ${JOB_DATABASE_ECHO:-false}
+      JOB_DATABASE_POOL_SIZE: ${JOB_DATABASE_POOL_SIZE:-5}
+      JOB_DATABASE_MAX_OVERFLOW: ${JOB_DATABASE_MAX_OVERFLOW:-10}
+      JOB_ENVIRONMENT: ${JOB_ENVIRONMENT:-production}
+    ports:
+      - "${API_PORT:-8000}:8000"
+    depends_on:
+      migration:
+        condition: service_completed_successfully
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health/live', timeout=2)"
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    read_only: true
+    tmpfs:
+      - /tmp
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    init: true
+    stop_grace_period: 30s
+    restart: unless-stopped
+
+  worker:
+    image: distributed-job-system:local
+    command:
+      - job-worker
+    environment:
+      JOB_DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
+      JOB_DATABASE_ECHO: ${JOB_DATABASE_ECHO:-false}
+      JOB_DATABASE_POOL_SIZE: ${JOB_DATABASE_POOL_SIZE:-5}
+      JOB_DATABASE_MAX_OVERFLOW: ${JOB_DATABASE_MAX_OVERFLOW:-10}
+      JOB_WORKER_QUEUES: ${JOB_WORKER_QUEUES:-default,reports,emails}
+      JOB_WORKER_CONCURRENCY: ${JOB_WORKER_CONCURRENCY:-4}
+      JOB_WORKER_POLL_INTERVAL_SECONDS: ${JOB_WORKER_POLL_INTERVAL_SECONDS:-0.5}
+      JOB_WORKER_RETRY_BASE_DELAY_SECONDS: ${JOB_WORKER_RETRY_BASE_DELAY_SECONDS:-5}
+      JOB_WORKER_RETRY_MAX_DELAY_SECONDS: ${JOB_WORKER_RETRY_MAX_DELAY_SECONDS:-300}
+      JOB_WORKER_LEASE_DURATION_SECONDS: ${JOB_WORKER_LEASE_DURATION_SECONDS:-30}
+      JOB_WORKER_HEARTBEAT_INTERVAL_SECONDS: ${JOB_WORKER_HEARTBEAT_INTERVAL_SECONDS:-5}
+      JOB_WORKER_RECOVERY_INTERVAL_SECONDS: ${JOB_WORKER_RECOVERY_INTERVAL_SECONDS:-10}
+      JOB_WORKER_METRICS_PORT: 9000
+      JOB_ENVIRONMENT: ${JOB_ENVIRONMENT:-production}
+    ports:
+      - "${JOB_WORKER_METRICS_PORT:-9000}:9000"
+    depends_on:
+      migration:
+        condition: service_completed_successfully
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import urllib.request; urllib.request.urlopen('http://127.0.0.1:9000/metrics', timeout=2)"
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    read_only: true
+    tmpfs:
+      - /tmp
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    init: true
+    stop_grace_period: 45s
+    restart: unless-stopped
+
 volumes:
   postgres_data:

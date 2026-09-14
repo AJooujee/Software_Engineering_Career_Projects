@@ -1,5 +1,5 @@
 from functools import lru_cache
-from typing import Self
+from typing import Literal, Self
 
 from pydantic import Field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -12,7 +12,7 @@ class Settings(BaseSettings):
         extra="ignore",
         case_sensitive=False,
     )
-
+    environment: Literal["development", "test", "production"] = "development"
     database_url: str = "postgresql+asyncpg://job_user:local_dev_password@localhost:5433/job_system"
     database_echo: bool = False
     database_pool_size: int = Field(default=5, ge=1, le=50)
@@ -73,6 +73,21 @@ class Settings(BaseSettings):
 
         if self.worker_heartbeat_interval_seconds >= self.worker_lease_duration_seconds:
             raise ValueError("worker heartbeat interval must be shorter than worker lease duration")
+
+        return self
+
+    @model_validator(mode="after")
+    def validate_production_configuration(self) -> Self:
+        """Reject development-only database settings in production."""
+
+        if self.environment != "production":
+            return self
+
+        if "local_dev_password" in self.database_url:
+            raise ValueError("production database URL must not use the local development password")
+
+        if self.database_echo:
+            raise ValueError("database echo must be disabled in production")
 
         return self
 
