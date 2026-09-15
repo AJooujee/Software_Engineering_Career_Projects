@@ -5,7 +5,7 @@ from httpx2 import AsyncClient
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from observability_platform.db.models import TelemetryRecord
+from observability_platform.db.models import AnomalyRecord, TelemetryRecord
 
 pytestmark = pytest.mark.asyncio
 
@@ -72,15 +72,21 @@ async def test_ingest_mixed_telemetry_batch(
     assert response.status_code == 202
     assert payload["accepted_count"] == 3
     assert len(payload["telemetry_ids"]) == 3
+    assert payload["detected_anomaly_count"] == 1
+    assert len(payload["anomaly_ids"]) == 1
     assert len(set(payload["telemetry_ids"])) == 3
     assert datetime.fromisoformat(payload["received_at"]).tzinfo is not None
     assert "X-Request-ID" in response.headers
     async with test_session_factory() as session:
-        result = await session.execute(
+        telemetry_result = await session.execute(
             select(func.count()).select_from(TelemetryRecord)
         )
+        anomaly_result = await session.execute(
+            select(func.count()).select_from(AnomalyRecord)
+        )
 
-    assert result.scalar_one() == 3
+    assert telemetry_result.scalar_one() == 3
+    assert anomaly_result.scalar_one() == 1
 
 
 async def test_ingest_rejects_unregistered_service(
@@ -166,3 +172,4 @@ async def test_openapi_schema_contains_telemetry_endpoint(
     assert response.status_code == 200
     assert "/api/v1/telemetry" in response.json()["paths"]
     assert "post" in response.json()["paths"]["/api/v1/telemetry"]
+    assert "get" in response.json()["paths"]["/api/v1/telemetry"]

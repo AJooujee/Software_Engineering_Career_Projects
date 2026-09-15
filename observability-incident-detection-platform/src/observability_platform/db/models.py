@@ -96,3 +96,52 @@ class TelemetryRecord(Base):
     service: Mapped[MonitoredService] = relationship(
         back_populates="telemetry_records",
     )
+    anomalies: Mapped[list[AnomalyRecord]] = relationship(
+        back_populates="telemetry",
+        cascade="all, delete-orphan",
+        passive_deletes=True,
+    )
+
+
+class AnomalyRecord(Base):
+    __tablename__ = "anomaly_records"
+    __table_args__ = (
+        Index(
+            "ix_anomaly_severity_detected_at",
+            "severity",
+            "detected_at",
+        ),
+        Index(
+            "ix_anomaly_rule_detected_at",
+            "rule_id",
+            "detected_at",
+        ),
+    )
+
+    id: Mapped[UUID] = mapped_column(
+        Uuid(as_uuid=True),
+        primary_key=True,
+        default=uuid4,
+    )
+    telemetry_id: Mapped[UUID] = mapped_column(
+        ForeignKey("telemetry_records.id", ondelete="CASCADE"),
+        index=True,
+    )
+    rule_id: Mapped[str] = mapped_column(String(100))
+    category: Mapped[str] = mapped_column(String(30))
+    severity: Mapped[str] = mapped_column(String(20))
+    title: Mapped[str] = mapped_column(String(200))
+    description: Mapped[str] = mapped_column(Text)
+    observed_value: Mapped[str | float] = mapped_column(JSON)
+    threshold: Mapped[str | float | None] = mapped_column(
+        JSON,
+        nullable=True,
+    )
+    detected_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+    )
+
+    telemetry: Mapped[TelemetryRecord] = relationship(
+        back_populates="anomalies",
+    )
