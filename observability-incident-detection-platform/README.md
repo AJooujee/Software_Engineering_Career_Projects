@@ -6,9 +6,10 @@ health, detecting abnormal behavior, and managing incidents.
 The project is being developed incrementally to demonstrate backend engineering,
 observability, automated testing, and production-oriented system design.
 
+
 ## Current Status
 
-Phase 3: Persistent Storage and Service Registry
+Phase 4: Telemetry Querying and Rule-Based Anomaly Detection
 
 Implemented:
 
@@ -17,6 +18,13 @@ Implemented:
 - Request ID and structured JSON logging
 - Metric, log, and event telemetry schemas
 - Batch telemetry ingestion API
+- Telemetry query API with service, environment, type, and source filters
+- Deterministic rule-based anomaly detection engine
+- Metric threshold, log severity, and event severity rules
+- Transactional anomaly persistence linked to source telemetry
+- Filterable anomaly query API
+- Time-range filtering and offset-based pagination
+- Newest-first telemetry ordering
 - PostgreSQL persistent telemetry storage
 - Monitored service registry
 - SQLAlchemy asynchronous ORM and repository layer
@@ -30,6 +38,8 @@ Documentation:
 
 - [Telemetry Ingestion](docs/telemetry-ingestion.md)
 - [Database Persistence and Service Registry](docs/database-persistence.md)
+- [Telemetry Querying](docs/telemetry-querying.md)
+- [Rule-Based Anomaly Detection](docs/anomaly-detection.md)
 
 ## Technology Stack
 
@@ -100,6 +110,10 @@ Available endpoints:
 - Telemetry ingestion: `POST http://127.0.0.1:8000/api/v1/telemetry`
 - Swagger UI: `http://127.0.0.1:8000/docs`
 - OpenAPI schema: `http://127.0.0.1:8000/openapi.json`
+- Telemetry query: `GET http://127.0.0.1:8000/api/v1/telemetry`
+- OpenAPI schema: `http://127.0.0.1:8000/openapi.json`
+- Detected anomalies: `GET http://127.0.0.1:8000/api/v1/anomalies`
+
 ## Configuration
 
 Configuration can be supplied using environment variables with the
@@ -153,7 +167,7 @@ python -m ruff format --check .
 - [x] Phase 1: Foundation and service bootstrap
 - [x] Phase 2: Telemetry ingestion API
 - [x] Phase 3: Persistent telemetry storage and service registry
-- [ ] Phase 4: Rule-based anomaly and incident detection
+- [x] Phase 4: Rule-based anomaly and incident detection
 - [ ] Phase 5: Alerting and incident lifecycle management
 - [ ] Phase 6: Event correlation and root-cause analysis
 - [ ] Phase 7: Metrics dashboards and distributed tracing

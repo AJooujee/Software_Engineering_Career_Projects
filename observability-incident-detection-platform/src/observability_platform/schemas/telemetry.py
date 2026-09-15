@@ -1,6 +1,6 @@
 from datetime import UTC, datetime
 from enum import StrEnum
-from typing import Annotated, Literal
+from typing import Annotated, Any, Literal
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -73,3 +73,24 @@ class TelemetryIngestResponse(BaseModel):
     accepted_count: int = Field(ge=0)
     telemetry_ids: list[UUID]
     received_at: datetime
+    detected_anomaly_count: int = Field(default=0, ge=0)
+    anomaly_ids: list[UUID] = Field(default_factory=list)
+
+
+class TelemetryRecordResponse(BaseModel):
+    id: UUID
+    service_id: UUID
+    service: str
+    environment: ServiceEnvironment
+    type: Literal["metric", "log", "event"]
+    source: str
+    observed_at: datetime
+    received_at: datetime
+    payload: dict[str, Any]
+
+
+class TelemetryQueryResponse(BaseModel):
+    items: list[TelemetryRecordResponse]
+    total: int = Field(ge=0)
+    limit: int = Field(ge=1, le=100)
+    offset: int = Field(ge=0)
