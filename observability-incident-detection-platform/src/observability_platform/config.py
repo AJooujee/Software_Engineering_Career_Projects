@@ -14,6 +14,10 @@ class Settings(BaseSettings):
         env_prefix="OBSERVABILITY_",
         extra="ignore",
     )
+    database_url: str = (
+        "postgresql+asyncpg://observability:observability_dev"
+        "@localhost:5433/observability"
+    )
 
 
 @lru_cache

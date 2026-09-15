@@ -8,25 +8,43 @@ observability, automated testing, and production-oriented system design.
 
 ## Current Status
 
-Phase 2: Telemetry Ingestion API
+Phase 3: Persistent Storage and Service Registry
 
 Implemented:
 
 - FastAPI application foundation
-- Health-check endpoint
 - Environment-based configuration
-- Request ID middleware
-- Structured JSON request logging
+- Request ID and structured JSON logging
 - Metric, log, and event telemetry schemas
-- Discriminated Pydantic validation
-- Batch telemetry ingestion endpoint
-- Concurrency-safe in-memory telemetry storage
-- Automated unit and API integration tests
-- Ruff linting and formatting
-- GitHub Actions continuous integration
+- Batch telemetry ingestion API
+- PostgreSQL persistent telemetry storage
+- Monitored service registry
+- SQLAlchemy asynchronous ORM and repository layer
+- Atomic database transactions and rollback
+- Alembic schema migrations
+- Application and database health endpoints
+- Isolated database integration tests
+- GitHub Actions with PostgreSQL migration validation
 
-See [Telemetry Ingestion](docs/telemetry-ingestion.md) for the Phase 2 API
-design and validation rules.
+Documentation:
+
+- [Telemetry Ingestion](docs/telemetry-ingestion.md)
+- [Database Persistence and Service Registry](docs/database-persistence.md)
+
+## Technology Stack
+
+- Python 3.12+
+- FastAPI
+- PostgreSQL 17
+- SQLAlchemy 2
+- asyncpg
+- Alembic
+- Docker Compose
+- Pydantic Settings
+- Pytest and pytest-asyncio
+- HTTPX2
+- Ruff
+- GitHub Actions
 
 ## Project Structure
 
@@ -74,10 +92,14 @@ python -m uvicorn observability_platform.main:app --reload
 
 Available endpoints:
 
-- Health check: `http://127.0.0.1:8000/health`
+- Application health: `GET http://127.0.0.1:8000/health`
+- Database health: `GET http://127.0.0.1:8000/health/db`
+- Register service: `POST http://127.0.0.1:8000/api/v1/services`
+- List services: `GET http://127.0.0.1:8000/api/v1/services`
+- Get service: `GET http://127.0.0.1:8000/api/v1/services/{service_id}`
+- Telemetry ingestion: `POST http://127.0.0.1:8000/api/v1/telemetry`
 - Swagger UI: `http://127.0.0.1:8000/docs`
 - OpenAPI schema: `http://127.0.0.1:8000/openapi.json`
-- Telemetry ingestion: `POST http://127.0.0.1:8000/api/v1/telemetry`
 ## Configuration
 
 Configuration can be supplied using environment variables with the
@@ -95,6 +117,16 @@ Supported environments:
 - `development`
 - `testing`
 - `production`
+
+
+## Database Setup
+
+Create the local environment file:
+
+```powershell
+Copy-Item .env.example .env
+```
+
 
 ## Quality Checks
 
@@ -120,7 +152,7 @@ python -m ruff format --check .
 
 - [x] Phase 1: Foundation and service bootstrap
 - [x] Phase 2: Telemetry ingestion API
-- [ ] Phase 3: Persistent telemetry storage and service registry
+- [x] Phase 3: Persistent telemetry storage and service registry
 - [ ] Phase 4: Rule-based anomaly and incident detection
 - [ ] Phase 5: Alerting and incident lifecycle management
 - [ ] Phase 6: Event correlation and root-cause analysis
