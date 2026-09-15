@@ -1,20 +1,46 @@
 from datetime import datetime
 
-from fastapi.testclient import TestClient
+import pytest
+from httpx2 import AsyncClient
+from sqlalchemy import func, select
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from observability_platform.main import app
+from observability_platform.db.models import TelemetryRecord
 
-client = TestClient(app)
+pytestmark = pytest.mark.asyncio
 
 
-def test_ingest_mixed_telemetry_batch() -> None:
-    response = client.post(
+async def register_service(
+    api_client: AsyncClient,
+    *,
+    name: str = "checkout-service",
+    environment: str = "development",
+) -> None:
+    response = await api_client.post(
+        "/api/v1/services",
+        json={
+            "name": name,
+            "environment": environment,
+        },
+    )
+
+    assert response.status_code == 201
+
+
+async def test_ingest_mixed_telemetry_batch(
+    api_client: AsyncClient,
+    test_session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    await register_service(api_client)
+
+    response = await api_client.post(
         "/api/v1/telemetry",
         json={
             "items": [
                 {
                     "type": "metric",
                     "service": "checkout-service",
+                    "environment": "development",
                     "source": "checkout-instance-1",
                     "name": "cpu_usage",
                     "value": 72.5,
@@ -23,6 +49,7 @@ def test_ingest_mixed_telemetry_batch() -> None:
                 {
                     "type": "log",
                     "service": "checkout-service",
+                    "environment": "development",
                     "source": "checkout-instance-1",
                     "level": "error",
                     "message": "Payment provider timed out",
@@ -30,6 +57,7 @@ def test_ingest_mixed_telemetry_batch() -> None:
                 {
                     "type": "event",
                     "service": "checkout-service",
+                    "environment": "development",
                     "source": "checkout-instance-1",
                     "name": "service_restart",
                     "severity": "warning",
@@ -47,10 +75,42 @@ def test_ingest_mixed_telemetry_batch() -> None:
     assert len(set(payload["telemetry_ids"])) == 3
     assert datetime.fromisoformat(payload["received_at"]).tzinfo is not None
     assert "X-Request-ID" in response.headers
+    async with test_session_factory() as session:
+        result = await session.execute(
+            select(func.count()).select_from(TelemetryRecord)
+        )
+
+    assert result.scalar_one() == 3
 
 
-def test_ingest_rejects_empty_batch() -> None:
-    response = client.post(
+async def test_ingest_rejects_unregistered_service(
+    api_client: AsyncClient,
+) -> None:
+    response = await api_client.post(
+        "/api/v1/telemetry",
+        json={
+            "items": [
+                {
+                    "type": "metric",
+                    "service": "unknown-service",
+                    "source": "unknown-instance-1",
+                    "name": "cpu_usage",
+                    "value": 50.0,
+                }
+            ]
+        },
+    )
+
+    assert response.status_code == 422
+    assert response.json()["detail"] == (
+        "Service 'unknown-service' is not registered in environment 'development'"
+    )
+
+
+async def test_ingest_rejects_empty_batch(
+    api_client: AsyncClient,
+) -> None:
+    response = await api_client.post(
         "/api/v1/telemetry",
         json={"items": []},
     )
@@ -58,8 +118,10 @@ def test_ingest_rejects_empty_batch() -> None:
     assert response.status_code == 422
 
 
-def test_ingest_rejects_unknown_telemetry_type() -> None:
-    response = client.post(
+async def test_ingest_rejects_unknown_telemetry_type(
+    api_client: AsyncClient,
+) -> None:
+    response = await api_client.post(
         "/api/v1/telemetry",
         json={
             "items": [
@@ -75,8 +137,10 @@ def test_ingest_rejects_unknown_telemetry_type() -> None:
     assert response.status_code == 422
 
 
-def test_ingest_rejects_invalid_metric_value() -> None:
-    response = client.post(
+async def test_ingest_rejects_invalid_metric_value(
+    api_client: AsyncClient,
+) -> None:
+    response = await api_client.post(
         "/api/v1/telemetry",
         json={
             "items": [
@@ -94,8 +158,10 @@ def test_ingest_rejects_invalid_metric_value() -> None:
     assert response.status_code == 422
 
 
-def test_openapi_schema_contains_telemetry_endpoint() -> None:
-    response = client.get("/openapi.json")
+async def test_openapi_schema_contains_telemetry_endpoint(
+    api_client: AsyncClient,
+) -> None:
+    response = await api_client.get("/openapi.json")
 
     assert response.status_code == 200
     assert "/api/v1/telemetry" in response.json()["paths"]

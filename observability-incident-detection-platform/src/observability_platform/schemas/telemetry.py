@@ -5,6 +5,8 @@ from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from observability_platform.schemas.service import ServiceEnvironment
+
 
 class LogLevel(StrEnum):
     DEBUG = "debug"
@@ -29,6 +31,7 @@ class TelemetryBase(BaseModel):
     )
 
     service: str = Field(min_length=1, max_length=100)
+    environment: ServiceEnvironment = ServiceEnvironment.DEVELOPMENT
     source: str = Field(min_length=1, max_length=200)
     timestamp: datetime = Field(default_factory=lambda: datetime.now(UTC))
     attributes: dict[str, str | int | float | bool] = Field(default_factory=dict)
