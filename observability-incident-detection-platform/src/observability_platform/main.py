@@ -1,5 +1,6 @@
 from fastapi import FastAPI
 
+from observability_platform.api.routes.telemetry import router as telemetry_router
 from observability_platform.config import get_settings
 from observability_platform.logging_config import configure_logging
 from observability_platform.middleware import RequestIDMiddleware
@@ -14,6 +15,7 @@ app = FastAPI(
 )
 
 app.add_middleware(RequestIDMiddleware)
+app.include_router(telemetry_router)
 
 
 @app.get("/health")

@@ -8,7 +8,7 @@ observability, automated testing, and production-oriented system design.
 
 ## Current Status
 
-Phase 1: Foundation and Service Bootstrap
+Phase 2: Telemetry Ingestion API
 
 Implemented:
 
@@ -17,18 +17,16 @@ Implemented:
 - Environment-based configuration
 - Request ID middleware
 - Structured JSON request logging
-- Automated API and middleware tests
+- Metric, log, and event telemetry schemas
+- Discriminated Pydantic validation
+- Batch telemetry ingestion endpoint
+- Concurrency-safe in-memory telemetry storage
+- Automated unit and API integration tests
 - Ruff linting and formatting
+- GitHub Actions continuous integration
 
-## Technology Stack
-
-- Python 3.12+
-- FastAPI
-- Uvicorn
-- Pydantic Settings
-- Pytest
-- HTTPX2
-- Ruff
+See [Telemetry Ingestion](docs/telemetry-ingestion.md) for the Phase 2 API
+design and validation rules.
 
 ## Project Structure
 
@@ -79,7 +77,7 @@ Available endpoints:
 - Health check: `http://127.0.0.1:8000/health`
 - Swagger UI: `http://127.0.0.1:8000/docs`
 - OpenAPI schema: `http://127.0.0.1:8000/openapi.json`
-
+- Telemetry ingestion: `POST http://127.0.0.1:8000/api/v1/telemetry`
 ## Configuration
 
 Configuration can be supplied using environment variables with the
@@ -120,11 +118,11 @@ python -m ruff format --check .
 
 ## Development Roadmap
 
-1. Foundation and service bootstrap
-2. Telemetry ingestion API
-3. Persistent telemetry storage and service registry
-4. Rule-based anomaly and incident detection
-5. Alerting and incident lifecycle management
-6. Event correlation and root-cause analysis
-7. Metrics dashboards and distributed tracing
-8. Containerization, CI/CD, security, and production hardening
+- [x] Phase 1: Foundation and service bootstrap
+- [x] Phase 2: Telemetry ingestion API
+- [ ] Phase 3: Persistent telemetry storage and service registry
+- [ ] Phase 4: Rule-based anomaly and incident detection
+- [ ] Phase 5: Alerting and incident lifecycle management
+- [ ] Phase 6: Event correlation and root-cause analysis
+- [ ] Phase 7: Metrics dashboards and distributed tracing
+- [ ] Phase 8: Containerization, CI/CD, security, and production hardening
