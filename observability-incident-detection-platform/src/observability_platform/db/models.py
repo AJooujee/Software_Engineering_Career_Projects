@@ -62,6 +62,13 @@ class MonitoredService(Base):
         cascade="all, delete-orphan",
         passive_deletes=True,
     )
+    # Delete a service's trace spans through the database foreign-key cascade
+    # while keeping both sides of the ORM relationship synchronized.
+    trace_spans: Mapped[list[TraceSpanRecord]] = relationship(
+        back_populates="service",
+        cascade="all, delete-orphan",
+        passive_deletes=True,
+    )
 
 
 class TelemetryRecord(Base):
@@ -306,4 +313,103 @@ class CorrelationIncidentRecord(Base):
     added_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         server_default=func.now(),
+    )
+
+
+class TraceSpanRecord(Base):
+    """Persist one timed operation within a distributed trace."""
+
+    # Map this ORM model to the PostgreSQL trace span table.
+    __tablename__ = "trace_spans"
+
+    # Define identity constraints and indexes for trace reconstruction,
+    # service-level dashboards, and error analysis.
+    __table_args__ = (
+        # A span identifier must be unique inside one distributed trace.
+        UniqueConstraint(
+            "trace_id",
+            "span_id",
+            name="uq_trace_spans_trace_id_span_id",
+        ),
+        # Optimize loading a complete trace in chronological order.
+        Index(
+            "ix_trace_span_trace_started_at",
+            "trace_id",
+            "started_at",
+        ),
+        # Support service-level latency queries over a time range.
+        Index(
+            "ix_trace_span_service_started_at",
+            "service_id",
+            "started_at",
+        ),
+        # Support querying failed spans over a time range.
+        Index(
+            "ix_trace_span_status_started_at",
+            "status",
+            "started_at",
+        ),
+    )
+
+    # Internal UUID identity remains separate from external W3C identifiers.
+    id: Mapped[UUID] = mapped_column(
+        Uuid(as_uuid=True),
+        primary_key=True,
+        default=uuid4,
+    )
+
+    # Associate each span with a registered monitored service. Deleting the
+    # service removes its trace spans through the database cascade.
+    service_id: Mapped[UUID] = mapped_column(
+        ForeignKey("monitored_services.id", ondelete="CASCADE"),
+    )
+
+    # Store the external W3C trace and span identifiers used to reconstruct
+    # relationships across independently instrumented services.
+    trace_id: Mapped[str] = mapped_column(String(32))
+    span_id: Mapped[str] = mapped_column(String(16))
+
+    # Root spans have no parent. This field is indexed for efficient child-span
+    # lookup but is not a foreign key because parents may arrive later.
+    parent_span_id: Mapped[str | None] = mapped_column(
+        String(16),
+        nullable=True,
+        index=True,
+    )
+
+    # Record the runtime instance and operation represented by this span.
+    source: Mapped[str] = mapped_column(String(200))
+    operation: Mapped[str] = mapped_column(String(200))
+
+    # Store the normalized execution result: unset, ok, or error.
+    status: Mapped[str] = mapped_column(
+        String(20),
+        default="unset",
+    )
+
+    # Preserve the original execution interval supplied by instrumentation.
+    started_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+    )
+    ended_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+    )
+
+    # Denormalize duration to support efficient latency aggregation without
+    # repeatedly calculating the difference between timestamps.
+    duration_ms: Mapped[float] = mapped_column(Float)
+
+    # Keep protocol- and application-specific metadata in flexible JSON.
+    attributes: Mapped[dict[str, Any]] = mapped_column(JSON)
+
+    # Record when the platform accepted the span independently of execution
+    # time, which may originate from another host or arrive later.
+    received_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+    )
+
+    # Expose the monitored service through the inverse ORM relationship.
+    service: Mapped[MonitoredService] = relationship(
+        back_populates="trace_spans",
     )
