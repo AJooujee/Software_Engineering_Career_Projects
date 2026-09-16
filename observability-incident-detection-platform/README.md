@@ -9,7 +9,7 @@ observability, automated testing, and production-oriented system design.
 
 ## Current Status
 
-Phase 6: Event Correlation and Root-Cause Analysis
+Phase 7: Metrics Dashboards and Distributed Tracing
 
 Implemented:
 
@@ -45,6 +45,19 @@ Implemented:
 - Prevention of incident reuse across correlations
 - Filterable correlation query and detail APIs
 - SQLite foreign-key enforcement in integration tests
+- W3C-compatible distributed trace and span schemas
+- Atomic multi-service trace span ingestion
+- Persistent PostgreSQL trace span storage
+- Parent-child span hierarchy preservation
+- Cross-service distributed trace reconstruction
+- Per-span and trace-level duration calculation
+- Duplicate trace span detection and conflict handling
+- Metric dashboard aggregation from persisted telemetry
+- Service, environment, source, metric, and time-window filtering
+- Minimum, maximum, average, p95, and latest metric statistics
+- Chronologically ordered dashboard time-series points
+- Metric unit consistency validation
+- PostgreSQL and SQLite-compatible dashboard querying
 
 Documentation:
 
@@ -54,6 +67,8 @@ Documentation:
 - [Incident Lifecycle Management](docs/incident-lifecycle.md)
 - [Database Persistence and Service Registry](docs/database-persistence.md)
 - [Event Correlation and Root-Cause Analysis](docs/event-correlation.md)
+- [Distributed Tracing](docs/distributed-tracing.md)
+- [Metrics Dashboard](docs/metrics-dashboard.md)
 
 ## Technology Stack
 
@@ -133,6 +148,9 @@ Available endpoints:
 - Analyze correlations: `POST http://127.0.0.1:8000/api/v1/correlations/analyze`
 - Query correlations: `GET http://127.0.0.1:8000/api/v1/correlations`
 - Correlation details: `GET http://127.0.0.1:8000/api/v1/correlations/{correlation_id}`
+- Trace span ingestion: `POST http://127.0.0.1:8000/api/v1/traces`
+- Distributed trace details: `GET http://127.0.0.1:8000/api/v1/traces/{trace_id}`
+- Metric dashboard summary: `GET http://127.0.0.1:8000/api/v1/dashboard/metrics/summary`
 
 ## Configuration
 
@@ -190,5 +208,5 @@ python -m ruff format --check .
 - [x] Phase 4: Rule-based anomaly and incident detection
 - [x] Phase 5: Alerting and incident lifecycle management
 - [x] Phase 6: Event correlation and root-cause analysis
-- [ ] Phase 7: Metrics dashboards and distributed tracing
+- [x] Phase 7: Metrics dashboards and distributed tracing
 - [ ] Phase 8: Containerization, CI/CD, security, and production hardening
