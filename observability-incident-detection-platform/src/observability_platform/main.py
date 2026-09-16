@@ -6,6 +6,9 @@ from fastapi import FastAPI
 from observability_platform.api.routes.anomalies import (
     router as anomalies_router,
 )
+from observability_platform.api.routes.correlations import (
+    router as correlations_router,
+)
 from observability_platform.api.routes.health import router as health_router
 from observability_platform.api.routes.incidents import (
     router as incidents_router,
@@ -41,6 +44,7 @@ app.include_router(anomalies_router)
 app.include_router(health_router)
 app.include_router(incidents_router)
 app.include_router(services_router)
+app.include_router(correlations_router)
 app.include_router(telemetry_router)
 
 

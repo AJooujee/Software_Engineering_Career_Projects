@@ -1,7 +1,9 @@
 from collections.abc import AsyncIterator
+from typing import Any
 
 import pytest_asyncio
 from httpx2 import ASGITransport, AsyncClient
+from sqlalchemy import event
 from sqlalchemy.ext.asyncio import (
     AsyncSession,
     async_sessionmaker,
@@ -14,12 +16,28 @@ from observability_platform.db.session import get_db_session
 from observability_platform.main import app
 
 
+def enable_sqlite_foreign_keys(
+    dbapi_connection: Any,
+    _: Any,
+) -> None:
+    # Match PostgreSQL behavior by enforcing foreign keys in SQLite tests.
+    cursor = dbapi_connection.cursor()
+    cursor.execute("PRAGMA foreign_keys=ON")
+    cursor.close()
+
+
 @pytest_asyncio.fixture
 async def test_session_factory() -> AsyncIterator[async_sessionmaker[AsyncSession]]:
     test_engine = create_async_engine(
         "sqlite+aiosqlite:///:memory:",
         connect_args={"check_same_thread": False},
         poolclass=StaticPool,
+    )
+    # Enforce relational integrity during integration tests.
+    event.listen(
+        test_engine.sync_engine,
+        "connect",
+        enable_sqlite_foreign_keys,
     )
     session_factory = async_sessionmaker(
         bind=test_engine,
