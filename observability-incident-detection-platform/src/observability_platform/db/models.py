@@ -7,6 +7,7 @@ from uuid import UUID, uuid4
 from sqlalchemy import (
     JSON,
     DateTime,
+    Float,
     ForeignKey,
     Index,
     String,
@@ -229,4 +230,80 @@ class IncidentRecord(Base):
     )
     trigger_anomaly: Mapped[AnomalyRecord] = relationship(
         back_populates="incident",
+    )
+
+
+class CorrelationRecord(Base):
+    __tablename__ = "correlations"
+    __table_args__ = (
+        Index(
+            "ix_correlation_service_status",
+            "service_id",
+            "status",
+        ),
+        Index(
+            "ix_correlation_created_at",
+            "created_at",
+        ),
+    )
+
+    id: Mapped[UUID] = mapped_column(
+        Uuid(as_uuid=True),
+        primary_key=True,
+        default=uuid4,
+    )
+    service_id: Mapped[UUID] = mapped_column(
+        ForeignKey("monitored_services.id", ondelete="CASCADE"),
+    )
+    status: Mapped[str] = mapped_column(
+        String(20),
+        default="active",
+    )
+    window_started_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+    )
+    window_ended_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+    )
+    root_cause_anomaly_id: Mapped[UUID] = mapped_column(
+        ForeignKey("anomaly_records.id", ondelete="CASCADE"),
+        index=True,
+    )
+    root_cause_incident_id: Mapped[UUID] = mapped_column(
+        ForeignKey("incidents.id", ondelete="CASCADE"),
+    )
+    root_cause_confidence: Mapped[float] = mapped_column(Float)
+    root_cause_reasons: Mapped[list[str]] = mapped_column(JSON)
+    summary: Mapped[str] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        onupdate=func.now(),
+    )
+
+
+class CorrelationIncidentRecord(Base):
+    __tablename__ = "correlation_incidents"
+    __table_args__ = (
+        UniqueConstraint(
+            "incident_id",
+            name="uq_correlation_incidents_incident_id",
+        ),
+    )
+
+    correlation_id: Mapped[UUID] = mapped_column(
+        ForeignKey("correlations.id", ondelete="CASCADE"),
+        primary_key=True,
+    )
+    incident_id: Mapped[UUID] = mapped_column(
+        ForeignKey("incidents.id", ondelete="CASCADE"),
+        primary_key=True,
+    )
+    added_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
     )

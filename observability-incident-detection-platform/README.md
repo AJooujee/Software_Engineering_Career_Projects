@@ -9,7 +9,7 @@ observability, automated testing, and production-oriented system design.
 
 ## Current Status
 
-Phase 5: Alerting and Incident Lifecycle Management
+Phase 6: Event Correlation and Root-Cause Analysis
 
 Implemented:
 
@@ -38,8 +38,13 @@ Implemented:
 - Incident lifecycle transitions: open, acknowledged, and resolved
 - Filterable incident query and detail APIs
 - Incident ownership and resolution audit timestamps
-
-Documentation:
+- Time-window incident correlation by service and environment
+- Deterministic and explainable root-cause scoring
+- Probable root-cause confidence and evidence reasons
+- Atomic correlation and incident-link persistence
+- Prevention of incident reuse across correlations
+- Filterable correlation query and detail APIs
+- SQLite foreign-key enforcement in integration tests
 
 Documentation:
 
@@ -48,6 +53,7 @@ Documentation:
 - [Rule-Based Anomaly Detection](docs/anomaly-detection.md)
 - [Incident Lifecycle Management](docs/incident-lifecycle.md)
 - [Database Persistence and Service Registry](docs/database-persistence.md)
+- [Event Correlation and Root-Cause Analysis](docs/event-correlation.md)
 
 ## Technology Stack
 
@@ -117,7 +123,6 @@ Available endpoints:
 - Get service: `GET http://127.0.0.1:8000/api/v1/services/{service_id}`
 - Telemetry ingestion: `POST http://127.0.0.1:8000/api/v1/telemetry`
 - Swagger UI: `http://127.0.0.1:8000/docs`
-- OpenAPI schema: `http://127.0.0.1:8000/openapi.json`
 - Telemetry query: `GET http://127.0.0.1:8000/api/v1/telemetry`
 - OpenAPI schema: `http://127.0.0.1:8000/openapi.json`
 - Detected anomalies: `GET http://127.0.0.1:8000/api/v1/anomalies`
@@ -125,6 +130,9 @@ Available endpoints:
 - Incident details: `GET http://127.0.0.1:8000/api/v1/incidents/{incident_id}`
 - Acknowledge incident: `PATCH http://127.0.0.1:8000/api/v1/incidents/{incident_id}/acknowledge`
 - Resolve incident: `PATCH http://127.0.0.1:8000/api/v1/incidents/{incident_id}/resolve`
+- Analyze correlations: `POST http://127.0.0.1:8000/api/v1/correlations/analyze`
+- Query correlations: `GET http://127.0.0.1:8000/api/v1/correlations`
+- Correlation details: `GET http://127.0.0.1:8000/api/v1/correlations/{correlation_id}`
 
 ## Configuration
 
@@ -181,6 +189,6 @@ python -m ruff format --check .
 - [x] Phase 3: Persistent telemetry storage and service registry
 - [x] Phase 4: Rule-based anomaly and incident detection
 - [x] Phase 5: Alerting and incident lifecycle management
-- [ ] Phase 6: Event correlation and root-cause analysis
+- [x] Phase 6: Event correlation and root-cause analysis
 - [ ] Phase 7: Metrics dashboards and distributed tracing
 - [ ] Phase 8: Containerization, CI/CD, security, and production hardening
