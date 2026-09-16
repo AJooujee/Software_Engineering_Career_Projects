@@ -75,6 +75,8 @@ class TelemetryIngestResponse(BaseModel):
     received_at: datetime
     detected_anomaly_count: int = Field(default=0, ge=0)
     anomaly_ids: list[UUID] = Field(default_factory=list)
+    created_incident_count: int = Field(default=0, ge=0)
+    incident_ids: list[UUID] = Field(default_factory=list)
 
 
 class TelemetryRecordResponse(BaseModel):

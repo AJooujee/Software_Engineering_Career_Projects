@@ -9,7 +9,7 @@ observability, automated testing, and production-oriented system design.
 
 ## Current Status
 
-Phase 4: Telemetry Querying and Rule-Based Anomaly Detection
+Phase 5: Alerting and Incident Lifecycle Management
 
 Implemented:
 
@@ -33,13 +33,21 @@ Implemented:
 - Application and database health endpoints
 - Isolated database integration tests
 - GitHub Actions with PostgreSQL migration validation
+- Automatic incident creation for critical anomalies
+- Atomic telemetry, anomaly, and incident persistence
+- Incident lifecycle transitions: open, acknowledged, and resolved
+- Filterable incident query and detail APIs
+- Incident ownership and resolution audit timestamps
+
+Documentation:
 
 Documentation:
 
 - [Telemetry Ingestion](docs/telemetry-ingestion.md)
-- [Database Persistence and Service Registry](docs/database-persistence.md)
 - [Telemetry Querying](docs/telemetry-querying.md)
 - [Rule-Based Anomaly Detection](docs/anomaly-detection.md)
+- [Incident Lifecycle Management](docs/incident-lifecycle.md)
+- [Database Persistence and Service Registry](docs/database-persistence.md)
 
 ## Technology Stack
 
@@ -113,6 +121,10 @@ Available endpoints:
 - Telemetry query: `GET http://127.0.0.1:8000/api/v1/telemetry`
 - OpenAPI schema: `http://127.0.0.1:8000/openapi.json`
 - Detected anomalies: `GET http://127.0.0.1:8000/api/v1/anomalies`
+- Incidents: `GET http://127.0.0.1:8000/api/v1/incidents`
+- Incident details: `GET http://127.0.0.1:8000/api/v1/incidents/{incident_id}`
+- Acknowledge incident: `PATCH http://127.0.0.1:8000/api/v1/incidents/{incident_id}/acknowledge`
+- Resolve incident: `PATCH http://127.0.0.1:8000/api/v1/incidents/{incident_id}/resolve`
 
 ## Configuration
 
@@ -168,7 +180,7 @@ python -m ruff format --check .
 - [x] Phase 2: Telemetry ingestion API
 - [x] Phase 3: Persistent telemetry storage and service registry
 - [x] Phase 4: Rule-based anomaly and incident detection
-- [ ] Phase 5: Alerting and incident lifecycle management
+- [x] Phase 5: Alerting and incident lifecycle management
 - [ ] Phase 6: Event correlation and root-cause analysis
 - [ ] Phase 7: Metrics dashboards and distributed tracing
 - [ ] Phase 8: Containerization, CI/CD, security, and production hardening
