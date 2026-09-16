@@ -6,12 +6,16 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from observability_platform.repositories.anomaly_repository import (
     AnomalyRepository,
 )
+from observability_platform.repositories.incident_repository import (
+    IncidentRepository,
+)
 from observability_platform.repositories.service_repository import (
     ServiceRepository,
 )
 from observability_platform.repositories.telemetry_repository import (
     TelemetryRepository,
 )
+from observability_platform.schemas.anomaly import AnomalySeverity
 from observability_platform.schemas.service import ServiceEnvironment
 from observability_platform.schemas.telemetry import (
     TelemetryBatch,
@@ -32,6 +36,7 @@ class PersistentTelemetryService:
         self._service_repository = ServiceRepository(session)
         self._telemetry_repository = TelemetryRepository(session)
         self._anomaly_repository = AnomalyRepository(session)
+        self._incident_repository = IncidentRepository(session)
         self._detection_engine = AnomalyDetectionEngine()
 
     async def ingest(
@@ -83,6 +88,26 @@ class PersistentTelemetryService:
                 detected_at=received_at,
             )
 
+            service_id_by_telemetry_id = {
+                record.id: record.service_id for record in records
+            }
+            critical_anomalies = [
+                (
+                    anomaly,
+                    service_id_by_telemetry_id[telemetry_id],
+                )
+                for anomaly, (finding, telemetry_id) in zip(
+                    anomaly_records,
+                    findings_with_telemetry_ids,
+                    strict=True,
+                )
+                if finding.severity is AnomalySeverity.CRITICAL
+            ]
+            incident_records = await self._incident_repository.create_batch(
+                critical_anomalies,
+                created_at=received_at,
+            )
+
             await self._session.commit()
         except Exception:
             await self._session.rollback()
@@ -94,4 +119,6 @@ class PersistentTelemetryService:
             received_at=received_at,
             detected_anomaly_count=len(anomaly_records),
             anomaly_ids=[record.id for record in anomaly_records],
+            created_incident_count=len(incident_records),
+            incident_ids=[record.id for record in incident_records],
         )

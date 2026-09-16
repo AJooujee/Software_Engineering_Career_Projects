@@ -56,6 +56,11 @@ class MonitoredService(Base):
         cascade="all, delete-orphan",
         passive_deletes=True,
     )
+    incidents: Mapped[list[IncidentRecord]] = relationship(
+        back_populates="service",
+        cascade="all, delete-orphan",
+        passive_deletes=True,
+    )
 
 
 class TelemetryRecord(Base):
@@ -96,6 +101,7 @@ class TelemetryRecord(Base):
     service: Mapped[MonitoredService] = relationship(
         back_populates="telemetry_records",
     )
+
     anomalies: Mapped[list[AnomalyRecord]] = relationship(
         back_populates="telemetry",
         cascade="all, delete-orphan",
@@ -144,4 +150,83 @@ class AnomalyRecord(Base):
 
     telemetry: Mapped[TelemetryRecord] = relationship(
         back_populates="anomalies",
+    )
+    incident: Mapped[IncidentRecord | None] = relationship(
+        back_populates="trigger_anomaly",
+        uselist=False,
+    )
+
+
+class IncidentRecord(Base):
+    __tablename__ = "incidents"
+    __table_args__ = (
+        UniqueConstraint(
+            "trigger_anomaly_id",
+            name="uq_incidents_trigger_anomaly_id",
+        ),
+        Index(
+            "ix_incident_status_created_at",
+            "status",
+            "created_at",
+        ),
+        Index(
+            "ix_incident_severity_created_at",
+            "severity",
+            "created_at",
+        ),
+        Index(
+            "ix_incident_service_status",
+            "service_id",
+            "status",
+        ),
+    )
+
+    id: Mapped[UUID] = mapped_column(
+        Uuid(as_uuid=True),
+        primary_key=True,
+        default=uuid4,
+    )
+    service_id: Mapped[UUID] = mapped_column(
+        ForeignKey("monitored_services.id", ondelete="CASCADE"),
+    )
+    trigger_anomaly_id: Mapped[UUID] = mapped_column(
+        ForeignKey("anomaly_records.id", ondelete="CASCADE"),
+    )
+    status: Mapped[str] = mapped_column(
+        String(20),
+        default="open",
+    )
+    severity: Mapped[str] = mapped_column(String(20))
+    title: Mapped[str] = mapped_column(String(200))
+    description: Mapped[str] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+    )
+    acknowledged_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
+    )
+    acknowledged_by: Mapped[str | None] = mapped_column(
+        String(100),
+        nullable=True,
+    )
+    resolved_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
+    )
+    resolved_by: Mapped[str | None] = mapped_column(
+        String(100),
+        nullable=True,
+    )
+    resolution_summary: Mapped[str | None] = mapped_column(
+        Text,
+        nullable=True,
+    )
+
+    service: Mapped[MonitoredService] = relationship(
+        back_populates="incidents",
+    )
+    trigger_anomaly: Mapped[AnomalyRecord] = relationship(
+        back_populates="incident",
     )
