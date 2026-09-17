@@ -1,0 +1,115 @@
+# Production deployment stack for PostgreSQL migrations and the API service.
+services:
+  postgres:
+    # Use the lightweight PostgreSQL 17 image used by the application.
+    image: postgres:17-alpine
+    environment:
+      # Deployment credentials must be supplied outside version control.
+      POSTGRES_DB: ${POSTGRES_DB:-observability}
+      POSTGRES_USER: ${POSTGRES_USER:-observability}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}
+    volumes:
+      # Preserve production records when containers are replaced or restarted.
+      - observability_production_data:/var/lib/postgresql/data
+    healthcheck:
+      # PostgreSQL must accept connections before migrations begin.
+      test:
+        - CMD-SHELL
+        - pg_isready -U "$${POSTGRES_USER}" -d "$${POSTGRES_DB}"
+      interval: 5s
+      timeout: 5s
+      retries: 12
+    restart: unless-stopped
+
+  migration:
+    # Build the production image once and reuse it for migrations and the API.
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: observability-platform:local
+    command:
+      # Apply the complete migration graph before starting the API.
+      - python
+      - -m
+      - alembic
+      - upgrade
+      - head
+    environment:
+      # Alembic imports the application configuration in production mode.
+      OBSERVABILITY_ENVIRONMENT: production
+      OBSERVABILITY_DATABASE_URL: >-
+        postgresql+asyncpg://${POSTGRES_USER:-observability}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-observability}
+
+      # Production validation requires authentication configuration even though
+      # the migration process does not expose an HTTP endpoint.
+      OBSERVABILITY_API_KEY_ENABLED: "true"
+      OBSERVABILITY_API_KEY: ${OBSERVABILITY_API_KEY:?OBSERVABILITY_API_KEY is required}
+
+      # Accept a JSON list supplied by the deployment environment. The fallback
+      # supports local production validation through localhost and Compose DNS.
+      OBSERVABILITY_TRUSTED_HOSTS: '${OBSERVABILITY_TRUSTED_HOSTS:-["localhost","127.0.0.1","api"]}'
+
+      # Rate limiting must remain enabled for production settings validation.
+      OBSERVABILITY_RATE_LIMIT_ENABLED: "true"
+    depends_on:
+      # Do not execute migrations until PostgreSQL reports healthy.
+      postgres:
+        condition: service_healthy
+    read_only: true
+    tmpfs:
+      # Provide temporary writable space while keeping the image filesystem
+      # read-only.
+      - /tmp
+    security_opt:
+      # Prevent processes from gaining additional operating-system privileges.
+      - no-new-privileges:true
+    cap_drop:
+      # The migration process does not require Linux kernel capabilities.
+      - ALL
+    restart: "no"
+
+  api:
+    # Reuse the exact image built by the migration service.
+    image: observability-platform:local
+    environment:
+      # Production settings intentionally fail closed when secrets are absent.
+      OBSERVABILITY_ENVIRONMENT: production
+      OBSERVABILITY_LOG_LEVEL: INFO
+      OBSERVABILITY_DATABASE_URL: >-
+        postgresql+asyncpg://${POSTGRES_USER:-observability}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-observability}
+
+      # Protect every business endpoint with the X-API-Key header.
+      OBSERVABILITY_API_KEY_ENABLED: "true"
+      OBSERVABILITY_API_KEY: ${OBSERVABILITY_API_KEY:?OBSERVABILITY_API_KEY is required}
+
+      # Accept the deployment hostname while retaining safe local defaults.
+      OBSERVABILITY_TRUSTED_HOSTS: '${OBSERVABILITY_TRUSTED_HOSTS:-["localhost","127.0.0.1","api"]}'
+
+      # Apply per-client fixed-window rate limiting to business endpoints.
+      OBSERVABILITY_RATE_LIMIT_ENABLED: "true"
+      OBSERVABILITY_RATE_LIMIT_REQUESTS: ${OBSERVABILITY_RATE_LIMIT_REQUESTS:-100}
+      OBSERVABILITY_RATE_LIMIT_WINDOW_SECONDS: ${OBSERVABILITY_RATE_LIMIT_WINDOW_SECONDS:-60}
+    ports:
+      # Publish the API on a configurable host port.
+      - "${OBSERVABILITY_API_PORT:-8000}:8000"
+    depends_on:
+      # Start only after PostgreSQL is healthy and migrations complete.
+      postgres:
+        condition: service_healthy
+      migration:
+        condition: service_completed_successfully
+    read_only: true
+    tmpfs:
+      # Permit temporary runtime files without making the image writable.
+      - /tmp
+    security_opt:
+      # Prevent privilege escalation inside the API container.
+      - no-new-privileges:true
+    cap_drop:
+      # Uvicorn does not require additional Linux capabilities on port 8000.
+      - ALL
+    restart: unless-stopped
+
+volumes:
+  # Production data remains separate from the development Compose volume.
+  observability_production_data:

@@ -1,5 +1,7 @@
+# Run automated validation for the Observability Platform subproject.
 name: Observability Platform CI
 
+# Validate changes pushed to any branch and pull requests targeting main.
 on:
   push:
     paths:
@@ -12,17 +14,26 @@ on:
       - "observability-incident-detection-platform/**"
       - ".github/workflows/observability-platform-ci.yml"
 
+# Cancel an obsolete run when a newer commit is pushed to the same branch or PR.
+concurrency:
+  group: observability-platform-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+# The workflow only needs permission to read repository source code.
 permissions:
   contents: read
 
 jobs:
   quality:
-    name: Test and Code Quality
+    name: Python Quality and Tests
     runs-on: ubuntu-latest
+    timeout-minutes: 15
 
+    # CI connects to the PostgreSQL service through its published host port.
     env:
       OBSERVABILITY_DATABASE_URL: postgresql+asyncpg://observability:observability_test@localhost:5433/observability
 
+    # Use a real PostgreSQL service so migration behavior matches production.
     services:
       postgres:
         image: postgres:17-alpine
@@ -38,14 +49,19 @@ jobs:
           --health-timeout 5s
           --health-retries 10
 
+    # Every shell command in this job runs inside the application directory.
     defaults:
       run:
         working-directory: observability-incident-detection-platform
 
     steps:
+      # Download source without leaving Git credentials in the working tree.
       - name: Check out repository
         uses: actions/checkout@v7
+        with:
+          persist-credentials: false
 
+      # Install the Python version declared by the application.
       - name: Set up Python
         uses: actions/setup-python@v7
         with:
@@ -53,19 +69,122 @@ jobs:
           cache: pip
           cache-dependency-path: observability-incident-detection-platform/pyproject.toml
 
+      # Install the application together with test and lint dependencies.
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
           python -m pip install -e ".[dev]"
 
-      - name: Run database migrations
+      # Compile application and migration modules to detect syntax errors.
+      - name: Compile Python modules
+        run: python -m compileall -q src migrations
+
+      # Confirm that the migration graph contains exactly one linear head.
+      - name: Validate Alembic migration heads
+        shell: bash
+        run: |
+          head_count="$(python -m alembic heads | grep -c '(head)')"
+          test "${head_count}" -eq 1
+          python -m alembic heads
+
+      # Apply every migration against the clean PostgreSQL service database.
+      - name: Apply database migrations
         run: python -m alembic upgrade head
 
+      # Confirm that the database reached the current migration head.
+      - name: Verify database migration state
+        run: python -m alembic current
+
+      # Detect ORM changes that are missing a corresponding migration.
+      - name: Check for missing schema migrations
+        run: python -m alembic check
+
+      # Enforce the repository's configured static-analysis rules.
       - name: Run Ruff lint
         run: python -m ruff check .
 
+      # Verify formatting without modifying checked-out source files.
       - name: Check Ruff formatting
         run: python -m ruff format --check .
 
+      # Run the complete application and integration regression suite.
       - name: Run tests
         run: python -m pytest -q
+
+  container:
+    name: Production Container
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    # Safe CI-only values satisfy production configuration interpolation.
+    # They are not credentials for any deployed environment.
+    env:
+      POSTGRES_PASSWORD: ci-production-database-password
+      OBSERVABILITY_API_KEY: ci-production-api-key-at-least-32-characters
+
+    # Every Docker command uses the application as its build context.
+    defaults:
+      run:
+        working-directory: observability-incident-detection-platform
+
+    steps:
+      # Download source without preserving Git authentication credentials.
+      - name: Check out repository
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      # Resolve the complete production Compose model and detect invalid YAML,
+      # missing variables, unsupported properties, or interpolation problems.
+      - name: Validate production Compose configuration
+        run: docker compose -f compose.production.yaml config --quiet
+
+      # Build the same production image definition validated locally.
+      - name: Build production image
+        run: |
+          docker build \
+            --pull \
+            --tag observability-platform:ci \
+            .
+
+      # Confirm that the image defaults to the dedicated unprivileged user.
+      - name: Verify non-root container user
+        shell: bash
+        run: |
+          configured_user="$(
+            docker image inspect \
+              observability-platform:ci \
+              --format '{{.Config.User}}'
+          )"
+          test "${configured_user}" = "10001:10001"
+          echo "Container user: ${configured_user}"
+
+      # Confirm that the installed application package is importable without
+      # relying on source files mounted from the GitHub Actions runner.
+      - name: Verify application import
+        run: |
+          docker run \
+            --rm \
+            --entrypoint python \
+            observability-platform:ci \
+            -c "import observability_platform; print('Application import OK')"
+
+      # Confirm that the runtime image includes Alembic and all migrations.
+      - name: Verify migration history in image
+        shell: bash
+        run: |
+          head_count="$(
+            docker run \
+              --rm \
+              --entrypoint python \
+              observability-platform:ci \
+              -m alembic heads |
+            grep -c '(head)'
+          )"
+          test "${head_count}" -eq 1
+
+          docker run \
+            --rm \
+            --entrypoint python \
+            observability-platform:ci \
+            -m alembic heads

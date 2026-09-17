@@ -9,7 +9,7 @@ observability, automated testing, and production-oriented system design.
 
 ## Current Status
 
-Phase 7: Metrics Dashboards and Distributed Tracing
+Phase 8: Containerization, CI/CD, Security, and Production Hardening
 
 Implemented:
 
@@ -58,6 +58,21 @@ Implemented:
 - Chronologically ordered dashboard time-series points
 - Metric unit consistency validation
 - PostgreSQL and SQLite-compatible dashboard querying
+- Environment-aware production configuration validation
+- API-key authentication for all business endpoints
+- Constant-time API credential comparison
+- Trusted-host validation
+- Security and no-store response headers
+- Per-client fixed-window API rate limiting
+- Public liveness and database-backed readiness endpoints
+- Multi-stage production Docker image
+- Dedicated non-root container runtime user
+- Read-only container filesystems and dropped Linux capabilities
+- Ordered PostgreSQL migration service before API startup
+- Isolated persistent production database storage
+- Hardened production Docker Compose deployment
+- CI validation for compilation, migrations, linting, formatting, and tests
+- CI validation for production Compose and container images
 
 Documentation:
 
@@ -69,6 +84,7 @@ Documentation:
 - [Event Correlation and Root-Cause Analysis](docs/event-correlation.md)
 - [Distributed Tracing](docs/distributed-tracing.md)
 - [Metrics Dashboard](docs/metrics-dashboard.md)
+- [Production Deployment and Security](docs/production-deployment.md)
 
 ## Technology Stack
 
@@ -89,22 +105,32 @@ Documentation:
 
 ```text
 observability-incident-detection-platform/
-├── .github/
-│   └── workflows/
-├── docs/
-├── src/
-│   └── observability_platform/
-│       ├── __init__.py
-│       ├── config.py
-│       ├── logging_config.py
-│       ├── main.py
-│       └── middleware.py
-├── tests/
-│   ├── test_health.py
-│   └── test_middleware.py
-├── .gitignore
-├── pyproject.toml
-└── README.md
+|-- docs/
+|-- migrations/
+|   `-- versions/
+|-- src/
+|   `-- observability_platform/
+|       |-- api/
+|       |-- db/
+|       |-- repositories/
+|       |-- schemas/
+|       |-- services/
+|       |-- config.py
+|       |-- logging_config.py
+|       |-- main.py
+|       |-- middleware.py
+|       |-- rate_limit.py
+|       `-- security.py
+|-- tests/
+|-- .dockerignore
+|-- .env.example
+|-- .env.production.example
+|-- alembic.ini
+|-- compose.production.yaml
+|-- compose.yaml
+|-- Dockerfile
+|-- pyproject.toml
+`-- README.md
 ```
 
 ## Local Setup
@@ -131,8 +157,10 @@ python -m uvicorn observability_platform.main:app --reload
 
 Available endpoints:
 
-- Application health: `GET http://127.0.0.1:8000/health`
-- Database health: `GET http://127.0.0.1:8000/health/db`
+- Application metadata health: `GET http://127.0.0.1:8000/health`
+- Process liveness: `GET http://127.0.0.1:8000/health/live`
+- Database readiness: `GET http://127.0.0.1:8000/health/ready`
+- Legacy database health: `GET http://127.0.0.1:8000/health/db`
 - Register service: `POST http://127.0.0.1:8000/api/v1/services`
 - List services: `GET http://127.0.0.1:8000/api/v1/services`
 - Get service: `GET http://127.0.0.1:8000/api/v1/services/{service_id}`
@@ -151,6 +179,12 @@ Available endpoints:
 - Trace span ingestion: `POST http://127.0.0.1:8000/api/v1/traces`
 - Distributed trace details: `GET http://127.0.0.1:8000/api/v1/traces/{trace_id}`
 - Metric dashboard summary: `GET http://127.0.0.1:8000/api/v1/dashboard/metrics/summary`
+Health endpoints and OpenAPI documentation remain public. When API-key
+authentication is enabled, business endpoints require the following header:
+
+```http
+X-API-Key: <configured-api-key>
+```
 
 ## Configuration
 
@@ -179,6 +213,42 @@ Create the local environment file:
 Copy-Item .env.example .env
 ```
 
+## Production Deployment
+
+Phase 8 provides a hardened multi-container production deployment with
+PostgreSQL, a one-time Alembic migration service, and the FastAPI application.
+
+Create an ignored production environment file:
+
+```powershell
+# Copy the safe template before replacing every placeholder.
+Copy-Item .env.production.example .env.production
+```
+
+Validate the deployment configuration:
+
+```powershell
+# Resolve Compose variables without starting containers.
+docker compose `
+  --env-file .env.production `
+  -f compose.production.yaml `
+  config --quiet
+```
+
+Build and start the production stack:
+
+```powershell
+# Build the production image, apply migrations, and start the API.
+docker compose `
+  --env-file .env.production `
+  -f compose.production.yaml `
+  up -d --build
+```
+
+See
+[Production Deployment and Security](docs/production-deployment.md)
+for configuration, credential generation, health checks, backups, updates,
+container hardening, and rollback guidance.
 
 ## Quality Checks
 
@@ -209,4 +279,8 @@ python -m ruff format --check .
 - [x] Phase 5: Alerting and incident lifecycle management
 - [x] Phase 6: Event correlation and root-cause analysis
 - [x] Phase 7: Metrics dashboards and distributed tracing
-- [ ] Phase 8: Containerization, CI/CD, security, and production hardening
+- [x] Phase 8: Containerization, CI/CD, security, and production hardening
+
+All planned implementation phases are complete. Future work will focus on
+maintenance, dependency updates, scalability, and deployment-specific
+integrations.

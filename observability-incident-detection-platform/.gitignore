@@ -11,10 +11,14 @@ __pycache__/
 .coverage
 htmlcov/
 
-# Environment variables
+# Environment variables and secrets
+# Real environment files must never be committed.
 .env
 .env.*
+
+# Safe templates are intentionally tracked for local and production setup.
 !.env.example
+!.env.production.example
 
 # IDE and operating system
 .vscode/
